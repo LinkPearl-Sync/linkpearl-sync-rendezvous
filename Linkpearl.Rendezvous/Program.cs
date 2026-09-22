@@ -30,16 +30,33 @@ if (args.Contains("--help"))
                 restrictifs, la charge utile étant de toute façon chiffrée de
                 bout en bout par les pairs eux-mêmes.
         --rate  annonces par minute et par adresse, au-delà desquelles on refuse.
+
+        --peers    fichier des services connus, une ligne « adresse  libellé »,
+                   relu à chaud : ajouter un service est une ligne écrite, pas
+                   un redémarrage.
+        --pending  fichier des candidatures reçues. Les relire, et recopier
+                   dans --peers celles qu'on accepte.
         """);
     return;
 }
+
+string ArgString(string name, string fallback)
+{
+    var index = Array.IndexOf(args, name);
+    return index >= 0 && index + 1 < args.Length ? args[index + 1] : fallback;
+}
+
+// L'annuaire vit dans deux fichiers que l'opérateur écrit et relit. Rien n'est
+// jamais ajouté à peers.txt par le service lui-même : une candidature attend
+// dans pending.txt qu'un humain la déplace.
+var directory = new PeerDirectory(ArgString("--peers", "peers.txt"), ArgString("--pending", "pending.txt"));
 
 using var stopping = new CancellationTokenSource();
 Console.CancelKeyPress += (_, e) => { e.Cancel = true; stopping.Cancel(); };
 
 try
 {
-    await new RendezvousServer(port, rate).RunAsync(stopping.Token);
+    await new RendezvousServer(port, rate, directory).RunAsync(stopping.Token);
 }
 catch (OperationCanceledException)
 {

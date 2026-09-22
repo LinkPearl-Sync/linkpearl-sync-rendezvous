@@ -125,6 +125,18 @@ public sealed class PeerSession(TcpClient client) : IDisposable
         }
     }
 
+    /// <summary>
+    /// Octets relayés depuis le démarrage, tous pontages confondus.
+    /// </summary>
+    /// <remarks>
+    /// Statique parce qu'un pontage naît et meurt avec deux sessions, alors que
+    /// le compteur doit survivre aux deux. Un seul service tourne par processus,
+    /// donc un compteur de processus est bien un compteur de service.
+    /// </remarks>
+    public static long TotalRelayedBytes => Interlocked.Read(ref _relayedBytes);
+
+    private static long _relayedBytes;
+
     private static async Task Copy(PeerSession from, PeerSession to, CancellationToken ct)
     {
         while (ct.IsCancellationRequested is false)
@@ -138,6 +150,7 @@ public sealed class PeerSession(TcpClient client) : IDisposable
                 return;
 
             await to.SendAsync(frame, ct).ConfigureAwait(false);
+            Interlocked.Add(ref _relayedBytes, frame.Length);
         }
     }
 
