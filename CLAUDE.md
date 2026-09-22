@@ -29,4 +29,11 @@ et son `docs/reprise.md` avant toute décision qui touche au protocole.
 ```sh
 dotnet build Linkpearl.Rendezvous/Linkpearl.Rendezvous.csproj -c Release   # sans warning
 dotnet test Linkpearl.Rendezvous.Tests/Linkpearl.Rendezvous.Tests.csproj
+
+# La console, en local : le jeton est journalisé au premier démarrage.
+dotnet run --project Linkpearl.Rendezvous -- --port 47900 --admin-port 47901
 ```
+
+La liste de bannissement (`Protocol/Core/Safety/BanList.cs`) fait partie de la copie
+littérale : le client doit dériver à l'identique, sans quoi une liste ne protège personne.
+`BanListTests.cs` est copié lui aussi, et c'est lui qui attrape une dérive de dérivation.

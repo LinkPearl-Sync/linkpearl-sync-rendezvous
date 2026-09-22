@@ -80,6 +80,79 @@ public sealed class PeerDirectory(string peersPath, string pendingPath)
         }
     }
 
+    /// <summary>Approuve une candidature : elle passe de la file aux pairs.</summary>
+    /// <remarks>
+    /// L'ordre compte : on écrit d'abord dans les pairs, puis on retire de la
+    /// file. Une coupure entre les deux laisse une ligne en double, que
+    /// l'opérateur voit et corrige ; l'ordre inverse la perdrait sans trace.
+    /// </remarks>
+    public bool Approve(string address)
+    {
+        lock (_gate)
+        {
+            var pending = Read(pendingPath);
+            var found = pending.Find(entry => entry.Address == address);
+
+            if (found is null)
+                return false;
+
+            var known = KnownLocked().ToList();
+
+            if (known.Exists(entry => entry.Address == address) is false)
+            {
+                known.Add(found);
+                WriteKnownLocked(known);
+            }
+
+            pending.RemoveAll(entry => entry.Address == address);
+            Write(pendingPath, pending);
+            return true;
+        }
+    }
+
+    /// <summary>Écarte une candidature sans l'approuver.</summary>
+    public bool Reject(string address)
+    {
+        lock (_gate)
+        {
+            var pending = Read(pendingPath);
+
+            if (pending.RemoveAll(entry => entry.Address == address) is 0)
+                return false;
+
+            Write(pendingPath, pending);
+            return true;
+        }
+    }
+
+    /// <summary>Retire un service de la liste des connus.</summary>
+    public bool Forget(string address)
+    {
+        lock (_gate)
+        {
+            var known = KnownLocked().ToList();
+
+            if (known.RemoveAll(entry => entry.Address == address) is 0)
+                return false;
+
+            WriteKnownLocked(known);
+            return true;
+        }
+    }
+
+    /// <summary>Écrit les pairs connus, et remet le cache d'accord avec eux.</summary>
+    /// <remarks>
+    /// Le cache se relit sur l'horodatage du fichier. Sans le remettre ici, une
+    /// écriture suivie d'une lecture dans la même graduation d'horloge
+    /// montrerait encore l'état d'avant.
+    /// </remarks>
+    private void WriteKnownLocked(List<DirectoryEntry> entries)
+    {
+        Write(peersPath, entries);
+        _known = entries;
+        _knownStamp = File.GetLastWriteTimeUtc(peersPath);
+    }
+
     private List<DirectoryEntry> KnownLocked()
     {
         var stamp = File.Exists(peersPath) ? File.GetLastWriteTimeUtc(peersPath) : DateTime.MinValue;

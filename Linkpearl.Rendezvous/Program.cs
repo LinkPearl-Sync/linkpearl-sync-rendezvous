@@ -10,6 +10,7 @@ using Linkpearl.Rendezvous;
 
 var port = 47900;
 var rate = 60;
+var adminPort = 47901;
 
 for (var i = 0; i < args.Length - 1; i++)
 {
@@ -18,6 +19,9 @@ for (var i = 0; i < args.Length - 1; i++)
 
     if (args[i] == "--rate" && int.TryParse(args[i + 1], out var parsedRate))
         rate = parsedRate;
+
+    if (args[i] == "--admin-port" && int.TryParse(args[i + 1], out var parsedAdminPort))
+        adminPort = parsedAdminPort;
 }
 
 if (args.Contains("--help"))
@@ -42,6 +46,16 @@ if (args.Contains("--help"))
         --public-address   l'adresse sous laquelle les autres vous joignent, à
                            donner avec --announce-to.
         --label            le nom qui s'affichera dans les annuaires.
+
+        --admin-port  port de la console d'administration. 47901 par défaut.
+        --admin-bind  interface de la console. 127.0.0.1 par défaut, et il vaut
+                      mieux l'y laisser : la console est en HTTP clair, donc le
+                      jeton voyagerait en clair. Pour l'ouvrir, un proxy inverse
+                      avec TLS devant, pas --admin-bind 0.0.0.0.
+        --no-admin    n'ouvre pas de console du tout.
+        --admin-token fichier du jeton. Engendré au premier démarrage, et
+                      journalisé une fois : admin.token par défaut.
+        --bans        fichier de la liste de bannissement. bans.json par défaut.
         """);
     return;
 }
@@ -88,9 +102,30 @@ foreach (var target in ArgAll("--announce-to"))
         stopping.Token);
 }
 
+var service = new RendezvousServer(port, rate, directory);
+var bans = new BanStore(ArgString("--bans", "bans.json"));
+
+// La liste est chargée tout de suite, et non à la première requête : c'est ce
+// qui écrit le sel au premier démarrage, et un sel qui naîtrait plus tard
+// invaliderait les empreintes déjà publiées.
+_ = bans.Current();
+
+var running = new List<Task> { service.RunAsync(stopping.Token) };
+
+if (args.Contains("--no-admin") is false)
+{
+    var token = AdminToken.LoadOrCreate(ArgString("--admin-token", "admin.token"));
+    var admin = new AdminServer(
+        ArgString("--admin-bind", "127.0.0.1"), adminPort, port, token, service, directory, bans);
+
+    running.Add(admin.RunAsync(stopping.Token));
+}
+
 try
 {
-    await new RendezvousServer(port, rate, directory).RunAsync(stopping.Token);
+    // WhenAny et non WhenAll : si la console tombe, le service doit s'arrêter
+    // aussi, plutôt que de continuer sans que personne puisse l'observer.
+    await await Task.WhenAny(running);
 }
 catch (OperationCanceledException)
 {
