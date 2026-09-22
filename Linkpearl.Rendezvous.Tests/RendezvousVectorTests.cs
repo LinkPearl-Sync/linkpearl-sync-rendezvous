@@ -55,6 +55,11 @@ public class RendezvousVectorTests
         ("boite-presence", () => RendezvousWire.MailboxPresence([true, false, true])),
         ("boite-depot", () => RendezvousWire.MailboxDeposit(AddressA, Payload)),
         ("boite-remise", () => RendezvousWire.MailboxDelivery(Payload)),
+        ("annuaire-demande", () => RendezvousWire.Simple(RendezvousKind.DirectoryQuery)),
+        ("annuaire", () => RendezvousWire.Directory(
+            [new DirectoryEntry("rdv.ami.ch", "Chez l'amie"),
+             new DirectoryEntry("rdv.exemple.ch:443", "Service commun")])),
+        ("annuaire-candidature", () => RendezvousWire.DirectorySubmit("rdv.nouveau.ch", "Chez le nouveau")),
     ];
 
     /// <summary>Les vecteurs, retrouvés dans les sources du dépôt.</summary>
@@ -117,6 +122,9 @@ public class RendezvousVectorTests
     [InlineData("adressesInterrogeesMax", RendezvousWire.MaxQueriedAddresses)]
     [InlineData("depotMax", RendezvousWire.MaxDepositLength)]
     [InlineData("chargeTicketMax", RendezvousWire.MaxTicketPayloadLength)]
+    [InlineData("entreesAnnuaireMax", RendezvousWire.MaxDirectoryEntries)]
+    [InlineData("libelleAnnuaireMax", RendezvousWire.MaxDirectoryLabelLength)]
+    [InlineData("adresseAnnuaireMax", RendezvousWire.MaxDirectoryAddressLength)]
     public void Les_plafonds_sont_les_memes_des_deux_cotes(string name, int expected)
     {
         // Un plafond qui diverge ne casse pas le format : il fait refuser chez

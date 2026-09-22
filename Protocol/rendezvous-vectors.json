@@ -10,7 +10,10 @@
     "candidatsScellesMax": 4096,
     "adressesInterrogeesMax": 64,
     "depotMax": 512,
-    "chargeTicketMax": 256
+    "chargeTicketMax": 256,
+    "entreesAnnuaireMax": 64,
+    "libelleAnnuaireMax": 64,
+    "adresseAnnuaireMax": 255
   },
   "trames": [
     {
@@ -68,6 +71,18 @@
     {
       "nom": "boite-remise",
       "hex": "11636861726765207574696c65207363656c6c6565"
+    },
+    {
+      "nom": "annuaire-demande",
+      "hex": "12"
+    },
+    {
+      "nom": "annuaire",
+      "hex": "13020a7264762e616d692e63680b4368657a206c27616d6965127264762e6578656d706c652e63683a3434330e5365727669636520636f6d6d756e"
+    },
+    {
+      "nom": "annuaire-candidature",
+      "hex": "14010e7264762e6e6f75766561752e63680f4368657a206c65206e6f7576656175"
     }
   ]
 }
