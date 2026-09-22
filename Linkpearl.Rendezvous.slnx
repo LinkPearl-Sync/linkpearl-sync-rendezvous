@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="Linkpearl.Rendezvous/Linkpearl.Rendezvous.csproj" />
+  <Project Path="Linkpearl.Rendezvous.Tests/Linkpearl.Rendezvous.Tests.csproj" />
+</Solution>

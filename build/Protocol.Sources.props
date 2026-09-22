@@ -1,0 +1,11 @@
+<Project>
+
+  <!-- Le format de fil est compilé par inclusion de sources, comme dans le
+       dépôt du plugin. Ces fichiers sont une copie littérale des siens : ils
+       doivent rester identiques à l'octet près, et Protocol/rendezvous-vectors.json
+       le fait échouer au test si l'un des deux côtés dérive. -->
+  <ItemGroup>
+    <Compile Include="$(MSBuildThisFileDirectory)..\Protocol\**\*.cs" LinkBase="Protocol" />
+  </ItemGroup>
+
+</Project>

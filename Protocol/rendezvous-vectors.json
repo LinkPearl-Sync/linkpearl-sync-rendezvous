@@ -1,0 +1,73 @@
+{
+  "commentaire": "Vecteurs figes du fil de rendez-vous. Ce fichier est identique dans le depot du plugin et dans celui du serveur : les deux le lisent et doivent le reproduire a l\u0027octet pres. Il atteste d\u0027une coherence de format entre les deux copies, pas de la justesse du protocole.",
+  "constantes": {
+    "tailleTicket": 16,
+    "fenetreMinutes": 10,
+    "tailleAdresseBoite": 6,
+    "tailleTicketInvitation": 6,
+    "longueurTrameMax": 65536,
+    "ticketsParAnnonceMax": 8,
+    "candidatsScellesMax": 4096,
+    "adressesInterrogeesMax": 64,
+    "depotMax": 512,
+    "chargeTicketMax": 256
+  },
+  "trames": [
+    {
+      "nom": "annonce",
+      "hex": "010211111111111111111111111111111111222222222222222222222222222222220007deadbeef010203"
+    },
+    {
+      "nom": "apparie",
+      "hex": "02deadbeef010203"
+    },
+    {
+      "nom": "relais-ouverture",
+      "hex": "0311111111111111111111111111111111"
+    },
+    {
+      "nom": "relais-pret",
+      "hex": "04"
+    },
+    {
+      "nom": "relais-donnees",
+      "hex": "05636861726765207574696c65207363656c6c6565"
+    },
+    {
+      "nom": "erreur",
+      "hex": "066a65746f6e20696e636f6e6e75"
+    },
+    {
+      "nom": "ticket-enregistrement",
+      "hex": "09111111111111636861726765207574696c65207363656c6c6565"
+    },
+    {
+      "nom": "ticket-retrait",
+      "hex": "0b111111111111"
+    },
+    {
+      "nom": "ticket-charge",
+      "hex": "0c636861726765207574696c65207363656c6c6565"
+    },
+    {
+      "nom": "boite-ouverture",
+      "hex": "0d02a1a1a1a1a1a1b2b2b2b2b2b2"
+    },
+    {
+      "nom": "boite-interrogation",
+      "hex": "0e02a1a1a1a1a1a1b2b2b2b2b2b2"
+    },
+    {
+      "nom": "boite-presence",
+      "hex": "0f0305"
+    },
+    {
+      "nom": "boite-depot",
+      "hex": "10a1a1a1a1a1a1636861726765207574696c65207363656c6c6565"
+    },
+    {
+      "nom": "boite-remise",
+      "hex": "11636861726765207574696c65207363656c6c6565"
+    }
+  ]
+}

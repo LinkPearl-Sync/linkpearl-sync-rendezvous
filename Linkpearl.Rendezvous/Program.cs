@@ -1,0 +1,47 @@
+using Linkpearl.Rendezvous;
+
+// Service de rendez-vous. Il aide deux pairs à se trouver, et relaie des octets
+// chiffrés quand la connexion directe échoue.
+//
+// Il ne voit ni clé publique, ni nom de personnage, ni manifeste, ni fichier :
+// seulement des adresses IP et des jetons opaques qui tournent toutes les dix
+// minutes. Voir docs/threat-model.md.
+
+var port = 47900;
+var rate = 60;
+
+for (var i = 0; i < args.Length - 1; i++)
+{
+    if (args[i] == "--port" && int.TryParse(args[i + 1], out var parsedPort))
+        port = parsedPort;
+
+    if (args[i] == "--rate" && int.TryParse(args[i + 1], out var parsedRate))
+        rate = parsedRate;
+}
+
+if (args.Contains("--help"))
+{
+    Console.WriteLine("""
+        Service de rendez-vous Linkpearl.
+
+          lprdv [--port 47900] [--rate 60]
+
+        --port  port TCP et UDP. 443 est un choix raisonnable pour les réseaux
+                restrictifs, la charge utile étant de toute façon chiffrée de
+                bout en bout par les pairs eux-mêmes.
+        --rate  annonces par minute et par adresse, au-delà desquelles on refuse.
+        """);
+    return;
+}
+
+using var stopping = new CancellationTokenSource();
+Console.CancelKeyPress += (_, e) => { e.Cancel = true; stopping.Cancel(); };
+
+try
+{
+    await new RendezvousServer(port, rate).RunAsync(stopping.Token);
+}
+catch (OperationCanceledException)
+{
+    Console.WriteLine("Arrêt.");
+}
