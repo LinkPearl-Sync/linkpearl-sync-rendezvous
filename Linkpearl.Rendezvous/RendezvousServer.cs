@@ -29,8 +29,24 @@ namespace Linkpearl.Rendezvous;
 /// Aucun état n'est persisté. Redémarrer le service n'efface rien puisqu'il n'y
 /// a rien à effacer.
 /// </remarks>
-public sealed class RendezvousServer(int port, int maxAnnouncementsPerMinute)
+public sealed class RendezvousServer(int port, int maxAnnouncementsPerMinute, PeerDirectory directory)
 {
+    /// <summary>
+    /// Ce que le service a fait depuis son démarrage.
+    /// </summary>
+    /// <remarks>
+    /// Tenu même sans personne pour le lire : une console d'administration
+    /// viendra plus tard, et reconstituer ces compteurs après coup demanderait
+    /// de retoucher chaque chemin de code. Aucune trame ne les expose.
+    /// </remarks>
+    public sealed record Counters(
+        int OpenMailboxes, int PendingAnnouncements, long Matches, long RelayedBytes,
+        int KnownPeers, int PendingSubmissions);
+
+    public Counters Snapshot() => new(
+        _mailboxes.Count, _waiting.Count, Matched, PeerSession.TotalRelayedBytes,
+        directory.Known().Count, directory.Pending().Count);
+
     private sealed class Waiting
     {
         public required PeerSession Session { get; init; }
@@ -154,6 +170,8 @@ public sealed class RendezvousServer(int port, int maxAnnouncementsPerMinute)
                     RendezvousKind.MailboxOpen => HandleMailboxOpen(session, frame),
                     RendezvousKind.MailboxQuery => await HandleMailboxQueryAsync(session, frame, ct).ConfigureAwait(false),
                     RendezvousKind.MailboxDeposit => await HandleMailboxDepositAsync(session, frame, ct).ConfigureAwait(false),
+                    RendezvousKind.DirectoryQuery => await HandleDirectoryQueryAsync(session, ct).ConfigureAwait(false),
+                    RendezvousKind.DirectorySubmit => HandleDirectorySubmit(session, frame),
                     _ => false,
                 };
 
@@ -184,6 +202,29 @@ public sealed class RendezvousServer(int port, int maxAnnouncementsPerMinute)
         {
             Forget(session);
         }
+    }
+
+    /// <summary>Publie les services connus. L'annuaire informe, il ne décide pas.</summary>
+    private async Task<bool> HandleDirectoryQueryAsync(PeerSession session, CancellationToken ct)
+    {
+        await session.SendAsync(RendezvousWire.Directory(directory.Known()), ct).ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>
+    /// Reçoit la candidature d'un service.
+    /// </summary>
+    /// <remarks>
+    /// Aucune réponse n'est faite, et c'est délibéré : le candidat n'a pas à
+    /// savoir s'il a été retenu, et une réponse ferait de cette trame un moyen
+    /// de sonder la file d'attente.
+    /// </remarks>
+    private bool HandleDirectorySubmit(PeerSession session, byte[] frame)
+    {
+        if (RendezvousWire.TryReadDirectory(frame, out var submitted, out _) && submitted.Count is 1)
+            directory.Submit(session.Address, submitted[0]);
+
+        return true;
     }
 
     private async Task<bool> HandleAnnounceAsync(PeerSession session, byte[] frame, CancellationToken ct)

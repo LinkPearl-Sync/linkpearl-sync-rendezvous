@@ -32,6 +32,22 @@ public static class RendezvousKind
 
     /// <summary>Remise poussée au destinataire.</summary>
     public const byte MailboxDelivery = 0x11;
+
+    /// <summary>Un client demande à un service la liste de ceux qu'il connaît.</summary>
+    public const byte DirectoryQuery = 0x12;
+
+    /// <summary>La réponse, une liste d'adresses et de libellés.</summary>
+    public const byte DirectoryList = 0x13;
+
+    /// <summary>
+    /// Un service se présente à un annuaire.
+    /// </summary>
+    /// <remarks>
+    /// La seule trame qu'un service envoie à un autre, dans un seul sens, sans
+    /// rien attendre en retour. Elle ne lui accorde aucune confiance : elle
+    /// dépose une candidature dans une file que l'opérateur lira.
+    /// </remarks>
+    public const byte DirectorySubmit = 0x14;
 }
 
 /// <summary>Ce qu'un client annonce au rendez-vous.</summary>
@@ -41,6 +57,13 @@ public static class RendezvousKind
 /// ne voit que des octets et l'adresse d'où ils viennent.
 /// </remarks>
 public sealed record Announcement(IReadOnlyList<byte[]> Tickets, byte[] SealedCandidates);
+
+/// <summary>Un service de rendez-vous tel qu'un annuaire le présente.</summary>
+/// <remarks>
+/// Le libellé vient du réseau : il est borné ici, et normalisé par l'interface
+/// avant affichage, comme les noms de pairs.
+/// </remarks>
+public sealed record DirectoryEntry(string Address, string Label);
 
 /// <summary>
 /// Format de trame du rendez-vous, partagé par le client et le serveur.
@@ -309,6 +332,118 @@ public static class RendezvousWire
         frame[0] = RendezvousKind.MailboxDelivery;
         payload.CopyTo(frame.AsSpan(1));
         return frame;
+    }
+
+    public const int MaxDirectoryEntries = 64;
+    public const int MaxDirectoryLabelLength = 64;
+    public const int MaxDirectoryAddressLength = 255;
+
+    /// <summary>
+    /// La liste des services qu'un service connaît.
+    /// </summary>
+    /// <remarks>
+    /// Elle vient de sa configuration, écrite par son opérateur, jamais d'un
+    /// échange entre services : il publie ce qu'il connaît, il n'interroge
+    /// personne.
+    /// </remarks>
+    public static byte[] Directory(IReadOnlyList<DirectoryEntry> entries)
+        => WriteEntries(RendezvousKind.DirectoryList, entries);
+
+    public static byte[] DirectorySubmit(string address, string label)
+        => WriteEntries(RendezvousKind.DirectorySubmit, [new DirectoryEntry(address, label)]);
+
+    private static byte[] WriteEntries(byte kind, IReadOnlyList<DirectoryEntry> entries)
+    {
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(entries.Count, MaxDirectoryEntries);
+
+        var bytes = new List<byte> { kind, (byte)entries.Count };
+
+        foreach (var entry in entries)
+        {
+            var address = System.Text.Encoding.UTF8.GetBytes(entry.Address);
+            var label = System.Text.Encoding.UTF8.GetBytes(entry.Label);
+
+            if (address.Length is 0 or > MaxDirectoryAddressLength)
+                throw new ArgumentException($"adresse hors bornes : {address.Length} octets", nameof(entries));
+
+            if (label.Length > MaxDirectoryLabelLength)
+                throw new ArgumentException($"libellé hors bornes : {label.Length} octets", nameof(entries));
+
+            bytes.Add((byte)address.Length);
+            bytes.AddRange(address);
+            bytes.Add((byte)label.Length);
+            bytes.AddRange(label);
+        }
+
+        return [.. bytes];
+    }
+
+    /// <summary>Lit une liste d'entrées, qu'elle vienne d'un annuaire ou d'une candidature.</summary>
+    public static bool TryReadDirectory(
+        ReadOnlySpan<byte> frame, out List<DirectoryEntry> entries, out string? rejection)
+    {
+        entries = [];
+
+        if (frame.Length < 2)
+        {
+            rejection = "trame trop courte";
+            return false;
+        }
+
+        var count = frame[1];
+
+        if (count > MaxDirectoryEntries)
+        {
+            rejection = $"nombre d'entrées hors bornes ({count}, plafond {MaxDirectoryEntries})";
+            return false;
+        }
+
+        var offset = 2;
+
+        for (var i = 0; i < count; i++)
+        {
+            if (TryReadText(frame, ref offset, MaxDirectoryAddressLength, "adresse", out var address, out rejection) is false)
+                return false;
+
+            if (TryReadText(frame, ref offset, MaxDirectoryLabelLength, "libellé", out var label, out rejection) is false)
+                return false;
+
+            entries.Add(new DirectoryEntry(address, label));
+        }
+
+        rejection = null;
+        return true;
+    }
+
+    private static bool TryReadText(
+        ReadOnlySpan<byte> frame, ref int offset, int max, string what, out string value, out string? rejection)
+    {
+        value = string.Empty;
+
+        if (offset >= frame.Length)
+        {
+            rejection = "trame tronquée";
+            return false;
+        }
+
+        var length = frame[offset++];
+
+        if (length > max)
+        {
+            rejection = $"{what} hors bornes ({length} octets, plafond {max})";
+            return false;
+        }
+
+        if (offset + length > frame.Length)
+        {
+            rejection = "trame tronquée";
+            return false;
+        }
+
+        value = System.Text.Encoding.UTF8.GetString(frame.Slice(offset, length));
+        offset += length;
+        rejection = null;
+        return true;
     }
 
     /// <summary>Préfixe de longueur, pour délimiter les trames sur un flux.</summary>

@@ -11,6 +11,13 @@
     <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
   </ItemGroup>
 
-  <Import Project="..\build\Protocol.Sources.props" />
+  <!-- Le serveur est un exécutable, et le référencer depuis les tests est
+       permis : c'est ce qui permet d'éprouver son annuaire sans réseau.
+       Le protocole vient avec lui, et surtout pas en plus : l'inclure une
+       seconde fois par Protocol.Sources.props donnerait deux exemplaires de
+       chaque type, que le compilateur refuse de départager. -->
+  <ItemGroup>
+    <ProjectReference Include="..\Linkpearl.Rendezvous\Linkpearl.Rendezvous.csproj" />
+  </ItemGroup>
 
 </Project>
