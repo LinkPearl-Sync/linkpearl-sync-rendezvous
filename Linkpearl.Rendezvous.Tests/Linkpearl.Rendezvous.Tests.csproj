@@ -11,13 +11,6 @@
     <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
   </ItemGroup>
 
-  <ItemGroup>
-    <None Include="..\Protocol\rendezvous-vectors.json">
-      <Link>rendezvous-vectors.json</Link>
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </None>
-  </ItemGroup>
-
   <Import Project="..\build\Protocol.Sources.props" />
 
 </Project>

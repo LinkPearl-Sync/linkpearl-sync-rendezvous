@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using Linkpearl.Core.Transport.Rendezvous;
@@ -56,13 +57,32 @@ public class RendezvousVectorTests
         ("boite-remise", () => RendezvousWire.MailboxDelivery(Payload)),
     ];
 
-    private static JsonElement Document()
+    /// <summary>Les vecteurs, retrouvés dans les sources du dépôt.</summary>
+    /// <remarks>
+    /// Le fichier ne vit pas au même endroit dans les deux dépôts, et il n'est
+    /// pas copié à côté de l'assembly. Partir du chemin de ce fichier-ci,
+    /// remonter jusqu'à la racine, puis chercher par nom : c'est ce qui permet
+    /// à ce test de rester identique des deux côtés, ce qui est précisément ce
+    /// qu'il sert à garantir.
+    /// </remarks>
+    private static JsonElement Document([CallerFilePath] string here = "")
     {
-        var path = Path.Combine(AppContext.BaseDirectory, "rendezvous-vectors.json");
+        var directory = new DirectoryInfo(Path.GetDirectoryName(here)!);
 
-        Assert.True(File.Exists(path), $"vecteurs introuvables : {path}");
+        while (directory is not null && directory.EnumerateFiles("*.slnx").Any() is false)
+            directory = directory.Parent;
 
-        return JsonDocument.Parse(File.ReadAllText(path)).RootElement.Clone();
+        Assert.True(directory is not null, $"racine du dépôt introuvable depuis {here}");
+
+        var found = directory!
+            .EnumerateFiles("rendezvous-vectors.json", SearchOption.AllDirectories)
+            .Where(file => file.FullName.Contains("/bin/", StringComparison.Ordinal) is false)
+            .Where(file => file.FullName.Contains("/obj/", StringComparison.Ordinal) is false)
+            .ToList();
+
+        Assert.True(found.Count == 1, $"un seul fichier de vecteurs attendu, {found.Count} trouvé(s)");
+
+        return JsonDocument.Parse(File.ReadAllText(found[0].FullName)).RootElement.Clone();
     }
 
     [Fact]
