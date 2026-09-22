@@ -27,8 +27,16 @@ La raison est étroite : sans TLS, le jeton d'administration voyagerait en clair
 Le mettre dans le service demanderait d'y gérer des certificats et leur
 renouvellement, pour refaire moins bien ce qu'un proxy fait déjà.
 
-`--admin-bind 0.0.0.0` reste possible, et c'est alors un choix explicite de
+`--admin-allow any` reste possible, et c'est alors un choix explicite de
 l'opérateur, que la documentation déconseille.
+
+**Corrigé à la mise en œuvre.** « N'écouter que sur `127.0.0.1` » s'est révélé
+irréalisable tel quel : `HttpListener` apparie ses préfixes sur l'en-tête `Host`,
+donc un préfixe lié à `127.0.0.1` rend 404 à tout proxy inverse, qui passe le nom
+public, et même à `localhost`. Le premier essai derrière un proxy est tombé
+exactement là. Le service écoute donc sur `+` et refuse par un 403 ce qui
+n'arrive pas de la boucle locale. La protection est la même pour qui vient
+d'ailleurs, à ceci près que le port répond au lieu de rester fermé.
 
 ### `HttpListener`, et non ASP.NET Core
 
@@ -55,6 +63,14 @@ Décision reprise de la conception de fédération, et qui ne se rediscute pas i
   les exposerait pour une raison étrangère à ce qu'ils ont fait ;
 - **appliquée par le client autant que par le service**, sans quoi un opérateur
   complaisant suffirait à offrir un refuge.
+
+**Corrigé à la mise en œuvre.** La dérivation est `pbkdf2-sha256` à 600 000
+itérations, et non `argon2id` : tout ce qui est cryptographique dans ce projet
+passe par la bibliothèque standard, sans dépendance, et le client doit dériver à
+l'identique depuis un autre dépôt. Le prix est que PBKDF2 se calcule bien sur
+processeur graphique, là où argon2 y résisterait par sa consommation mémoire :
+l'énumération reste chère, moins qu'avec lui. Les exemples ci-dessous gardent
+`argon2id` pour mémoire de ce qui était visé.
 
 ### La vérification a lieu au pairage et à la pose, jamais à la détection
 

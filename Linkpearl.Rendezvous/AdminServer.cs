@@ -11,17 +11,24 @@ namespace Linkpearl.Rendezvous;
 /// La console d'administration : une page et quelques points d'entrée JSON.
 /// </summary>
 /// <remarks>
-/// En clair sur la boucle locale. Le chiffrement et l'exposition publique sont
-/// le travail d'un proxy inverse, que tout opérateur de VPS a déjà : les mettre
-/// ici demanderait de gérer des certificats et leur renouvellement, pour refaire
-/// moins bien ce qu'un proxy fait mieux.
+/// En clair, et servie à la machine locale seule. Le chiffrement et l'exposition
+/// publique sont le travail d'un proxy inverse, que tout opérateur de VPS a
+/// déjà : les mettre ici demanderait de gérer des certificats et leur
+/// renouvellement, pour refaire moins bien ce qu'un proxy fait mieux.
 ///
 /// <see cref="HttpListener"/> et non ASP.NET Core : la bibliothèque standard
 /// suffit pour sept cents lignes de service, là où le cadre ajouterait une pile
 /// entière et des dizaines de mégaoctets au binaire autonome.
+///
+/// Le préfixe est sur « + », donc le port est ouvert sur toutes les interfaces,
+/// et c'est <see cref="Serves"/> qui refuse ce qui ne vient pas de la machine.
+/// Un préfixe lié à 127.0.0.1 semblerait plus sûr, mais HttpListener apparie ses
+/// préfixes sur l'en-tête Host : il rendait alors 404 à tout proxy inverse, qui
+/// passe le nom public, et même à « localhost ». Or être derrière un proxy est
+/// précisément le déploiement prévu.
 /// </remarks>
 public sealed class AdminServer(
-    string bind, int adminPort, int servicePort, string token,
+    bool localOnly, int adminPort, int servicePort, string token,
     RendezvousServer service, PeerDirectory directory, BanStore bans)
 {
     /// <summary>La version, sans l'empreinte de commit que le SDK y accole.</summary>
@@ -35,15 +42,14 @@ public sealed class AdminServer(
     {
         using var listener = new HttpListener();
 
-        // « + » et non « 0.0.0.0 » : c'est la forme qu'attend HttpListener pour
-        // dire « toutes les interfaces ».
-        listener.Prefixes.Add($"http://{(bind is "0.0.0.0" or "*" ? "+" : bind)}:{adminPort}/");
+        listener.Prefixes.Add($"http://+:{adminPort}/");
         listener.Start();
 
-        Console.WriteLine($"Console d'administration sur http://{bind}:{adminPort}/");
+        Console.WriteLine($"Console d'administration sur http://127.0.0.1:{adminPort}/");
 
-        if (bind is not "127.0.0.1" and not "localhost")
-            Console.WriteLine("  Attention : elle est exposée hors de la machine, et le jeton voyage en clair.");
+        Console.WriteLine(localOnly
+            ? "  Le port est ouvert sur toutes les interfaces, mais seule la machine locale est servie."
+            : "  Attention : elle répond à tout le monde, et le jeton voyage en clair. Mettre un proxy avec TLS devant.");
 
         using var stop = ct.Register(listener.Close);
 
@@ -91,6 +97,12 @@ public sealed class AdminServer(
 
     private async Task HandleAsync(HttpListenerContext context)
     {
+        if (Serves(localOnly, context.Request.RemoteEndPoint?.Address) is false)
+        {
+            Respond(context, 403, "application/json", """{"error":"console réservée à la machine locale"}""");
+            return;
+        }
+
         var path = context.Request.Url?.AbsolutePath ?? "/";
         var method = context.Request.HttpMethod;
 
@@ -227,6 +239,28 @@ public sealed class AdminServer(
         };
 
         return document.ToJsonString();
+    }
+
+    /// <summary>Si cette adresse a droit à une réponse.</summary>
+    /// <remarks>
+    /// Un proxy inverse sur la même machine se présente en boucle locale, donc
+    /// le déploiement prévu passe. Ce qui vient d'ailleurs est refusé avant
+    /// même de lire le jeton : une console est une surface de plus, et rien
+    /// n'oblige à la présenter au monde entier.
+    /// </remarks>
+    public static bool Serves(bool localOnly, IPAddress? remote)
+    {
+        if (localOnly is false)
+            return true;
+
+        if (remote is null)
+            return false;
+
+        // Une connexion IPv4 arrivée sur une prise à double pile se présente en
+        // ::ffff:127.0.0.1, que IsLoopback ne reconnaît pas telle quelle.
+        var address = remote.IsIPv4MappedToIPv6 ? remote.MapToIPv4() : remote;
+
+        return IPAddress.IsLoopback(address);
     }
 
     private static JsonObject Peer(DirectoryEntry entry)

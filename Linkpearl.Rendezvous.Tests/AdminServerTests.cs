@@ -41,7 +41,7 @@ public sealed class AdminServerTests : IAsyncLifetime
         _root = $"http://127.0.0.1:{port}";
 
         var service = new RendezvousServer(47900, 60, _directory);
-        _running = new AdminServer("127.0.0.1", port, 47900, _token, service, _directory, _bans)
+        _running = new AdminServer(localOnly: true, port, 47900, _token, service, _directory, _bans)
             .RunAsync(_stopping.Token);
 
         return Task.CompletedTask;
@@ -191,6 +191,23 @@ public sealed class AdminServerTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Un_proxy_inverse_qui_passe_son_propre_nom_est_servi()
+    {
+        // Le déploiement prévu est derrière un proxy, qui passe le nom public.
+        // Lié à 127.0.0.1, HttpListener apparie ses préfixes sur l'en-tête Host
+        // et rendait 404 à tout proxy, et même à « localhost ».
+        foreach (var host in new[] { "linkpearl.exemple.ch", "localhost", "127.0.0.1" })
+        {
+            var request = new HttpRequestMessage(HttpMethod.Get, $"{_root}/");
+            request.Headers.Host = host;
+
+            var response = await _client.SendAsync(request);
+
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        }
+    }
+
+    [Fact]
     public async Task Un_chemin_inconnu_rend_404()
         => Assert.Equal(HttpStatusCode.NotFound, (await SendAsync(HttpMethod.Get, "/api/rien")).StatusCode);
 
@@ -207,6 +224,23 @@ public sealed class AdminServerTests : IAsyncLifetime
 
         return await _client.SendAsync(request);
     }
+
+    [Theory]
+    [InlineData("127.0.0.1", true)]
+    [InlineData("::1", true)]
+    [InlineData("::ffff:127.0.0.1", true)]
+    [InlineData("192.168.1.20", false)]
+    [InlineData("::ffff:192.168.1.20", false)]
+    public void Seule_la_machine_locale_est_servie(string remote, bool served)
+        => Assert.Equal(served, AdminServer.Serves(localOnly: true, IPAddress.Parse(remote)));
+
+    [Fact]
+    public void Une_adresse_inconnue_est_refusee()
+        => Assert.False(AdminServer.Serves(localOnly: true, null));
+
+    [Fact]
+    public void Ouverte_a_tous_elle_ne_filtre_plus()
+        => Assert.True(AdminServer.Serves(localOnly: false, IPAddress.Parse("192.168.1.20")));
 
     private static int FreePort()
     {

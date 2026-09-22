@@ -38,7 +38,8 @@ Une page, sur `http://127.0.0.1:47901/`, qui montre les compteurs, l'annuaire et
 bannissement, et qui permet d'approuver une candidature sans éditer un fichier en SSH.
 
 ```sh
-lprdv --port 47900 --admin-port 47901          # console sur la boucle locale
+lprdv --port 47900 --admin-port 47901          # console, machine locale seule
+lprdv --port 47900 --admin-allow any           # console ouverte à tous, à éviter
 lprdv --port 47900 --no-admin                  # pas de console du tout
 ```
 
@@ -46,10 +47,17 @@ Au premier démarrage, le service écrit un jeton aléatoire dans `admin.token` 
 journalise une fois. C'est lui que la page demande. Le perdre se répare en supprimant le
 fichier.
 
-**La console est en HTTP clair, et n'écoute que sur `127.0.0.1`.** Pour l'ouvrir depuis
-l'extérieur, mettre un proxy inverse avec TLS devant, pas `--admin-bind 0.0.0.0` : sans TLS,
-le jeton voyagerait en clair. Gérer des certificats ici reviendrait à refaire moins bien ce
-qu'un proxy fait déjà.
+**La console est en HTTP clair, et ne sert que la machine locale.** Pour l'ouvrir depuis
+l'extérieur, mettre un proxy inverse avec TLS sur la même machine, pas `--admin-allow any` :
+sans TLS, le jeton voyagerait en clair. Gérer des certificats ici reviendrait à refaire moins
+bien ce qu'un proxy fait déjà.
+
+Le port est ouvert sur toutes les interfaces et c'est le service qui refuse, par un 403, tout
+ce qui n'arrive pas de la boucle locale. Ce n'est pas le réglage qu'on aimerait écrire : un
+préfixe `HttpListener` lié à `127.0.0.1` n'apparie que les requêtes dont l'en-tête `Host` vaut
+littéralement `127.0.0.1`, et rendait donc 404 à tout proxy inverse, qui passe le nom public,
+et même à `localhost`. Or être derrière un proxy est le déploiement prévu. Un pare-feu sur le
+port de la console reste utile à qui veut la ceinture et les bretelles.
 
 Aucun nom de personnage n'apparaît nulle part sur cette page, et ce n'est pas une précaution
 d'affichage : le service n'en connaît aucun.

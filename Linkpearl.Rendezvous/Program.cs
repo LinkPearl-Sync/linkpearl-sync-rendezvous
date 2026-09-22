@@ -48,10 +48,11 @@ if (args.Contains("--help"))
         --label            le nom qui s'affichera dans les annuaires.
 
         --admin-port  port de la console d'administration. 47901 par défaut.
-        --admin-bind  interface de la console. 127.0.0.1 par défaut, et il vaut
-                      mieux l'y laisser : la console est en HTTP clair, donc le
-                      jeton voyagerait en clair. Pour l'ouvrir, un proxy inverse
-                      avec TLS devant, pas --admin-bind 0.0.0.0.
+        --admin-allow qui la console sert. « local » par défaut, et il vaut mieux
+                      l'y laisser : elle est en HTTP clair, donc le jeton
+                      voyagerait en clair. Pour l'ouvrir, un proxy inverse avec
+                      TLS sur la même machine, pas --admin-allow any.
+                      Un proxy local passe, quel que soit le nom qu'il présente.
         --no-admin    n'ouvre pas de console du tout.
         --admin-token fichier du jeton. Engendré au premier démarrage, et
                       journalisé une fois : admin.token par défaut.
@@ -116,7 +117,7 @@ if (args.Contains("--no-admin") is false)
 {
     var token = AdminToken.LoadOrCreate(ArgString("--admin-token", "admin.token"));
     var admin = new AdminServer(
-        ArgString("--admin-bind", "127.0.0.1"), adminPort, port, token, service, directory, bans);
+        ArgString("--admin-allow", "local") is not "any", adminPort, port, token, service, directory, bans);
 
     running.Add(admin.RunAsync(stopping.Token));
 }
