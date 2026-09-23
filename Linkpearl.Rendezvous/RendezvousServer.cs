@@ -143,6 +143,9 @@ public sealed class RendezvousServer(
     private int _activeRelays;
     private long _refusedConnections;
 
+    /// <summary>Vingt-quatre heures de trafic, en mémoire seulement.</summary>
+    public History History { get; } = new();
+
     /// <summary>La boucle qui accepte les connexions TCP.</summary>
     public LoopHealth AcceptLoop { get; } = new(clock);
 
@@ -960,6 +963,10 @@ public sealed class RendezvousServer(
     {
         var now = clock.UtcNow;
         var limits = Limits;
+
+        // Le balayage est le seul battement régulier du service : c'est lui
+        // qui alimente l'historique, plutôt qu'une boucle de plus.
+        History.Record(now, Snapshot());
 
         foreach (var (key, waiting) in _waiting)
         {

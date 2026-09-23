@@ -178,6 +178,29 @@ public sealed class AdminServer(
                 Respond(context, 200, "application/json", Status());
                 return;
 
+            case ("/api/history", "GET"):
+            {
+                // Trois fenêtres et pas un nombre libre : la page n'en propose
+                // que trois, et une fenêtre arbitraire n'aurait rien à montrer
+                // de plus que la journée entière.
+                var minutes = context.Request.QueryString["range"] switch
+                {
+                    "3m" => 3,
+                    "1h" => 60,
+                    "24h" => History.Capacity,
+                    _ => 0,
+                };
+
+                if (minutes is 0)
+                {
+                    Respond(context, 400, "application/json", """{"error":"range doit valoir 3m, 1h ou 24h"}""");
+                    return;
+                }
+
+                Respond(context, 200, "application/json", HistoryJson(minutes));
+                return;
+            }
+
             case ("/api/bans", "GET"):
                 Respond(context, 200, "application/json", bans.Json());
                 return;
@@ -324,6 +347,30 @@ public sealed class AdminServer(
         };
 
         return document.ToJsonString();
+    }
+
+    private string HistoryJson(int minutes)
+    {
+        var points = new JsonArray();
+
+        foreach (var point in service.History.Points(clock.UtcNow, minutes))
+        {
+            points.Add(new JsonObject
+            {
+                ["at"] = point.At,
+                ["openMailboxes"] = point.OpenMailboxes,
+                ["matches"] = point.Matches,
+                ["relayedBytes"] = point.RelayedBytes,
+                ["refusals"] = point.Refusals,
+            });
+        }
+
+        return new JsonObject
+        {
+            ["minutes"] = minutes,
+            ["stepSeconds"] = 60,
+            ["points"] = points,
+        }.ToJsonString();
     }
 
     private static JsonObject Loop(LoopHealth loop)

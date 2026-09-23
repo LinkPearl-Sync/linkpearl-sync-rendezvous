@@ -216,6 +216,36 @@ public sealed class AdminServerTests : IAsyncLifetime
             Assert.Equal(0, state["refusals"]![reason]!.GetValue<long>());
     }
 
+    [Theory]
+    [InlineData("3m", 3)]
+    [InlineData("1h", 60)]
+    [InlineData("24h", 1440)]
+    public async Task Lhistorique_rend_un_point_par_minute_sur_la_fenetre_demandee(string range, int expected)
+    {
+        _service.Sweep();
+
+        var response = await SendAsync(HttpMethod.Get, $"/api/history?range={range}");
+        var document = JsonNode.Parse(await response.Content.ReadAsStringAsync())!;
+        var points = document["points"]!.AsArray();
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(expected, document["minutes"]!.GetValue<int>());
+        Assert.Equal(expected, points.Count);
+        Assert.Equal(0, points[^1]!["openMailboxes"]!.GetValue<int>());
+        Assert.True(points[^1]!["at"]!.GetValue<long>() > points[0]!["at"]!.GetValue<long>() || expected is 1);
+    }
+
+    [Fact]
+    public async Task Une_fenetre_inconnue_est_refusee()
+    {
+        Assert.Equal(HttpStatusCode.BadRequest, (await SendAsync(HttpMethod.Get, "/api/history?range=7d")).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await SendAsync(HttpMethod.Get, "/api/history")).StatusCode);
+    }
+
+    [Fact]
+    public async Task Lhistorique_exige_le_jeton()
+        => Assert.Equal(HttpStatusCode.Unauthorized, (await _client.GetAsync($"{_root}/api/history?range=1h")).StatusCode);
+
     [Fact]
     public async Task La_sante_se_lit_sans_jeton_et_ne_dit_rien_dautre()
     {

@@ -86,6 +86,16 @@ public static class AdminPage
           .boucle .doux { margin-left: auto; text-align: right; }
           @media (min-width: 640px) { .boucles > * + * { border-left: 1px solid var(--bord); } }
           .courbe { margin-top: .8rem; }
+          .fenetres {
+            display: flex; gap: .25rem; align-items: center; margin: 0; border: none;
+            padding: .6rem 1.15rem;
+          }
+          .fenetres legend { float: left; margin-right: .6rem; padding: 0; font-size: .8rem; color: var(--doux); }
+          .fenetres label { position: relative; cursor: pointer; font-size: .85rem; }
+          .fenetres label input { position: absolute; opacity: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; }
+          .fenetres label { display: inline-block; padding: .25rem .7rem; border: 1px solid var(--bord); border-radius: 6px; color: var(--doux); }
+          .fenetres label:has(input:checked) { border-color: var(--nacre); color: var(--nacre); background: rgba(211,189,146,.08); }
+          .fenetres label:has(input:focus-visible) { outline: 2px solid var(--nacre); outline-offset: 1px; }
           .courbe svg { width: 100%; height: 56px; display: block; }
           .courbe .attente { display: flex; align-items: center; justify-content: center; height: 56px; }
           .courbe .attente[hidden] { display: none; }
@@ -171,13 +181,44 @@ public static class AdminPage
             <div class="carte"><b id="refusInvitation">0</b><span>invitations refusées</span></div>
             <div class="carte"><b id="refusConnexion">0</b><span>connexions refusées</span></div>
           </div>
-          <div class="panneau courbe">
+          <h2>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+            Historique <span class="compte" id="fenetreTexte">trois dernières minutes, une mesure toutes les cinq secondes</span>
+          </h2>
+          <div class="panneau courbe" style="margin-top:0">
+            <fieldset class="fenetres" id="fenetres">
+              <legend>Fenêtre</legend>
+              <label><input type="radio" name="fenetre" value="3m" checked>3 min</label>
+              <label><input type="radio" name="fenetre" value="1h">1 h</label>
+              <label><input type="radio" name="fenetre" value="24h">24 h</label>
+            </fieldset>
             <div>
               <div class="doux" style="display:flex;justify-content:space-between">
-                <span>Boîtes ouvertes, trois dernières minutes</span><span id="creteBoites">0 au plus</span>
+                <span>Boîtes ouvertes</span><span id="creteBoites">0 au plus</span>
               </div>
               <svg id="sparkBoites" viewBox="0 0 300 56" preserveAspectRatio="none" aria-hidden="true" hidden></svg>
-              <div class="attente doux" id="attenteCourbe">en attente d'une deuxième mesure</div>
+              <div class="attente doux" id="attenteBoites">en attente d'une deuxième mesure</div>
+            </div>
+            <div>
+              <div class="doux" style="display:flex;justify-content:space-between">
+                <span>Appariements</span><span id="creteAppariements">0 au plus</span>
+              </div>
+              <svg id="sparkAppariements" viewBox="0 0 300 56" preserveAspectRatio="none" aria-hidden="true" hidden></svg>
+              <div class="attente doux" id="attenteAppariements">en attente d'une deuxième mesure</div>
+            </div>
+            <div>
+              <div class="doux" style="display:flex;justify-content:space-between">
+                <span>Octets relayés</span><span id="creteOctets">0 o au plus</span>
+              </div>
+              <svg id="sparkOctets" viewBox="0 0 300 56" preserveAspectRatio="none" aria-hidden="true" hidden></svg>
+              <div class="attente doux" id="attenteOctets">en attente d'une deuxième mesure</div>
+            </div>
+            <div>
+              <div class="doux" style="display:flex;justify-content:space-between">
+                <span>Refus, limiteur et plafonds confondus</span><span id="creteRefus">0 au plus</span>
+              </div>
+              <svg id="sparkRefus" viewBox="0 0 300 56" preserveAspectRatio="none" aria-hidden="true" hidden></svg>
+              <div class="attente doux" id="attenteRefus">en attente d'une deuxième mesure</div>
             </div>
           </div>
 
@@ -239,7 +280,6 @@ public static class AdminPage
         <script>
         "use strict";
         const $ = (id) => document.getElementById(id);
-        const histoire = [];
         let dernier = null;
 
         function toast(texte, rate) {
@@ -307,10 +347,54 @@ public static class AdminPage
           return date + " (" + jours + " j)";
         }
 
-        function courbe(svg, valeurs) {
+        // Trois minutes vues depuis la page, une mesure par rafraîchissement ;
+        // au-delà, c'est le service qui tient l'anneau d'une journée.
+        const series = { Boites: [], Appariements: [], Octets: [], Refus: [] };
+        let fenetre = "3m";
+        let precedent = null;
+        let derniereHeure = 0;
+
+        function dessiner(nom, valeurs, crete) {
+          courbe($("spark" + nom), valeurs, $("attente" + nom));
+          $("crete" + nom).textContent = crete(Math.max(0, ...valeurs)) + " au plus";
+        }
+
+        function dessinerTout(s) {
+          dessiner("Boites", s.Boites, (n) => n);
+          dessiner("Appariements", s.Appariements, (n) => n);
+          dessiner("Octets", s.Octets, (n) => octets(n).join(" "));
+          dessiner("Refus", s.Refus, (n) => n);
+        }
+
+        async function chargerHistorique() {
+          const r = await appel("/api/history?range=" + fenetre, "GET");
+          if (!r || !r.ok) return;
+          const points = (await r.json()).points;
+          derniereHeure = Date.now();
+          dessinerTout({
+            Boites: points.map((p) => p.openMailboxes),
+            Appariements: points.map((p) => p.matches),
+            Octets: points.map((p) => p.relayedBytes),
+            Refus: points.map((p) => p.refusals)
+          });
+        }
+
+        function changerFenetre(valeur) {
+          fenetre = valeur;
+          $("fenetreTexte").textContent = fenetre === "3m"
+            ? "trois dernières minutes, une mesure toutes les cinq secondes"
+            : (fenetre === "1h" ? "dernière heure" : "dernières vingt-quatre heures") + ", un point par minute";
+          for (const nom in series) $("attente" + nom).textContent =
+            fenetre === "3m" ? "en attente d'une deuxième mesure" : "chargement";
+          if (fenetre === "3m") dessinerTout(series); else chargerHistorique();
+        }
+
+        $("fenetres").addEventListener("change", (e) => changerFenetre(e.target.value));
+
+        function courbe(svg, valeurs, attente) {
           svg.replaceChildren();
           svg.hidden = valeurs.length < 2;
-          $("attenteCourbe").hidden = valeurs.length >= 2;
+          attente.hidden = valeurs.length >= 2;
           if (valeurs.length < 2) return;
           const haut = Math.max(1, ...valeurs);
           const pas = 300 / (valeurs.length - 1);
@@ -414,10 +498,21 @@ public static class AdminPage
             + (s.pending.length ? ", " + s.pending.length + " en attente" : "");
           $("compteBans").textContent = s.bans.length + (s.bans.length > 1 ? " entrées" : " entrée");
 
-          histoire.push(c.openMailboxes);
-          if (histoire.length > 36) histoire.shift();
-          courbe($("sparkBoites"), histoire);
-          $("creteBoites").textContent = Math.max(0, ...histoire) + " au plus";
+          // Les compteurs sont cumulés depuis le démarrage ; la courbe montre
+          // ce qui s'est passé entre deux mesures, comme le fait le service
+          // pour ses minutes.
+          const refus = c.rateRefusals + c.refusedConnections;
+          series.Boites.push(c.openMailboxes);
+          if (precedent) {
+            series.Appariements.push(c.matches - precedent.matches);
+            series.Octets.push(c.relayedBytes - precedent.relayedBytes);
+            series.Refus.push(refus - precedent.refus);
+          }
+          precedent = { matches: c.matches, relayedBytes: c.relayedBytes, refus };
+          for (const nom in series) if (series[nom].length > 36) series[nom].shift();
+
+          if (fenetre === "3m") dessinerTout(series);
+          else if (Date.now() - derniereHeure > 60000) chargerHistorique();
 
           remplir($("connus"), s.known.map(p => ligne([
             p.address, p.label || "",
