@@ -135,7 +135,7 @@ public sealed class BanStore(string path)
 
     private void SaveLocked(BanList list)
     {
-        File.WriteAllText(path, list.ToJson(DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
+        AtomicFile.WriteAllText(path, list.ToJson(DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
         _list = list;
         _stamp = File.GetLastWriteTimeUtc(path);
     }

@@ -134,6 +134,28 @@ public sealed class AdminServer(
 
         _failures.Clear(Origin(context));
 
+        if (method is "POST" or "DELETE")
+        {
+            // Le navigateur rejoue l'authentification basique sur toute requête
+            // vers cette origine, y compris celles qu'une page tierce lui fait
+            // envoyer : sans ces deux verrous, un formulaire posé ailleurs
+            // pouvait bannir quelqu'un à la place de l'opérateur connecté.
+            // L'origine, telle que le navigateur la déclare ; et le type de
+            // contenu, qu'un formulaire HTML ne sait pas produire en JSON sans
+            // une requête préalable que la console ne répond pas.
+            if (context.Request.Headers["Sec-Fetch-Site"] is "cross-site")
+            {
+                Respond(context, 403, "application/json", """{"error":"requête venue d'un autre site"}""");
+                return;
+            }
+
+            if (IsJson(context.Request.ContentType) is false)
+            {
+                Respond(context, 415, "application/json", """{"error":"le corps doit être en application/json"}""");
+                return;
+            }
+        }
+
         switch (path, method)
         {
             case ("/", "GET"):
@@ -257,6 +279,10 @@ public sealed class AdminServer(
 
         return document.ToJsonString();
     }
+
+    private static bool IsJson(string? contentType)
+        => contentType is not null
+           && contentType.Split(';')[0].Trim().Equals("application/json", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>Si cette requête est une page demandée par un navigateur.</summary>
     /// <remarks>

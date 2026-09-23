@@ -224,5 +224,5 @@ public sealed class PeerDirectory(string peersPath, string pendingPath, IClock? 
     }
 
     private static void Write(string path, IReadOnlyList<DirectoryEntry> entries)
-        => File.WriteAllLines(path, entries.Select(entry => $"{entry.Address}  {entry.Label}"));
+        => AtomicFile.WriteAllLines(path, entries.Select(entry => $"{entry.Address}  {entry.Label}"));
 }

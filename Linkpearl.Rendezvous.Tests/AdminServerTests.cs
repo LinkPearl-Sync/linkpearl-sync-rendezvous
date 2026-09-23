@@ -265,11 +265,73 @@ public sealed class AdminServerTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Une_mutation_venue_dun_autre_site_est_refusee()
+    {
+        // Le navigateur rejoue l'authentification basique sur toute requête
+        // vers cette origine, y compris celles qu'un formulaire posé ailleurs
+        // lui fait envoyer : sans ce refus, une page tierce pouvait bannir
+        // quelqu'un à la place de l'opérateur connecté.
+        _directory.Submit("1.2.3.4", new DirectoryEntry("rdv.candidat.ch", "Candidat"));
+
+        var request = Request(HttpMethod.Post, "/api/peers", """{"address":"rdv.candidat.ch"}""");
+        request.Headers.Add("Sec-Fetch-Site", "cross-site");
+
+        var response = await _client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.Single(_directory.Pending());
+    }
+
+    [Fact]
+    public async Task Une_mutation_du_meme_site_passe()
+    {
+        _directory.Submit("1.2.3.4", new DirectoryEntry("rdv.candidat.ch", "Candidat"));
+
+        var request = Request(HttpMethod.Post, "/api/peers", """{"address":"rdv.candidat.ch"}""");
+        request.Headers.Add("Sec-Fetch-Site", "same-origin");
+
+        Assert.Equal(HttpStatusCode.OK, (await _client.SendAsync(request)).StatusCode);
+    }
+
+    [Fact]
+    public async Task Une_mutation_qui_nest_pas_du_json_est_refusee()
+    {
+        // Un formulaire HTML ne sait envoyer que trois types de contenu, et
+        // JSON n'en fait pas partie : l'exiger ferme la porte aux envois que
+        // le navigateur fait sans demander de permission.
+        var request = new HttpRequestMessage(HttpMethod.Post, $"{_root}/api/bans")
+        {
+            Headers = { Authorization = new AuthenticationHeaderValue("Bearer", _token) },
+            Content = new StringContent("""{"name":"Nom Fictif","world":42,"reason":"x"}""", Encoding.UTF8, "text/plain"),
+        };
+
+        var response = await _client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.UnsupportedMediaType, response.StatusCode);
+        Assert.Empty(_bans.Current().Entries);
+    }
+
+    [Fact]
+    public async Task Une_ecriture_de_la_console_ne_laisse_pas_de_fichier_temporaire()
+    {
+        await SendAsync(HttpMethod.Post, "/api/bans", body: """{"name":"Nom Fictif","world":42,"reason":"x"}""");
+        _directory.Submit("1.2.3.4", new DirectoryEntry("rdv.candidat.ch", "Candidat"));
+        await SendAsync(HttpMethod.Post, "/api/peers", body: """{"address":"rdv.candidat.ch"}""");
+
+        Assert.Empty(Directory.GetFiles(_dir, "*.tmp"));
+        Assert.True(_bans.Current().Contains("Nom Fictif", 42));
+        Assert.Contains("rdv.candidat.ch", File.ReadAllText(PeersPath));
+    }
+
+    [Fact]
     public async Task Un_chemin_inconnu_rend_404()
         => Assert.Equal(HttpStatusCode.NotFound, (await SendAsync(HttpMethod.Get, "/api/rien")).StatusCode);
 
-    private async Task<HttpResponseMessage> SendAsync(
+    private Task<HttpResponseMessage> SendAsync(
         HttpMethod method, string path, string? body = null, string? token = null)
+        => _client.SendAsync(Request(method, path, body, token));
+
+    private HttpRequestMessage Request(HttpMethod method, string path, string? body = null, string? token = null)
     {
         var request = new HttpRequestMessage(method, $"{_root}{path}")
         {
@@ -279,7 +341,7 @@ public sealed class AdminServerTests : IAsyncLifetime
         if (body is not null)
             request.Content = new StringContent(body, Encoding.UTF8, "application/json");
 
-        return await _client.SendAsync(request);
+        return request;
     }
 
     [Theory]
@@ -372,5 +434,21 @@ public sealed class AdminTokenExposureTests : IDisposable
 
         Assert.Contains(path, log.ToString());
         Assert.DoesNotContain(token, log.ToString());
+    }
+
+    [Fact]
+    public void Le_fichier_du_jeton_nest_lisible_que_par_son_proprietaire()
+    {
+        // Sur un VPS partagé, un jeton lisible par tout le monde vaut un jeton
+        // public. Le mode est donné à la création, pas posé après coup : entre
+        // les deux, le fichier aurait existé un instant avec le masque par défaut.
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var path = Path.Combine(_dir, "admin.token");
+
+        AdminToken.LoadOrCreate(path, TextWriter.Null);
+
+        Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, File.GetUnixFileMode(path));
     }
 }

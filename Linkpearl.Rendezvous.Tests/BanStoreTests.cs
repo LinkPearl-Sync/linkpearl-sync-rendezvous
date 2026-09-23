@@ -97,6 +97,19 @@ public sealed class BanStoreTests : IDisposable
     }
 
     [Fact]
+    public void Lecriture_ne_laisse_pas_de_fichier_temporaire()
+    {
+        // Écrite à côté puis renommée : une coupure au milieu laisse l'ancienne
+        // liste intacte plutôt qu'un fichier à moitié écrit que personne ne relit.
+        var store = new BanStore(Path_);
+        store.Add("Nom Fictif", 42, "contenu illegal");
+        store.Add("Autre Nom", 43, "contenu illegal");
+
+        Assert.Empty(Directory.GetFiles(_dir, "*.tmp"));
+        Assert.True(new BanStore(Path_).Current().Contains("Autre Nom", 43));
+    }
+
+    [Fact]
     public void Une_liste_illisible_ne_bannit_personne_et_nest_pas_ecrasee()
     {
         File.WriteAllText(Path_, "ceci n'est pas du JSON");

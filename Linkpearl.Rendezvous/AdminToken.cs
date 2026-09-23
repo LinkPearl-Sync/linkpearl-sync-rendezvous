@@ -28,14 +28,28 @@ public static class AdminToken
         }
 
         var token = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(Length));
-        File.WriteAllText(path, token + Environment.NewLine);
+
+        // Le service tourne sur un VPS partagé aussi souvent qu'ailleurs : un
+        // jeton lisible par tout le monde vaut un jeton public. Le mode est
+        // donné à la création même du fichier, et non posé après coup : entre
+        // les deux, il aurait existé un instant sous le masque par défaut.
+        var options = new FileStreamOptions { Mode = FileMode.Create, Access = FileAccess.Write, Share = FileShare.None };
 
         // « ! » et non « is false » : c'est la forme que l'analyseur de
         // plateforme reconnaît comme une garde.
         if (!OperatingSystem.IsWindows())
+            options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+
+        using (var stream = new FileStream(path, options))
+        using (var writer = new StreamWriter(stream))
         {
-            // Le service tourne sur un VPS partagé aussi souvent qu'ailleurs :
-            // un jeton lisible par tout le monde vaut un jeton public.
+            writer.WriteLine(token);
+        }
+
+        if (!OperatingSystem.IsWindows())
+        {
+            // Un fichier trop court qui existait déjà a gardé son ancien mode :
+            // celui-ci le remet d'équerre, et ne coûte rien sinon.
             File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
         }
 
