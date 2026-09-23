@@ -141,6 +141,11 @@ public static class AdminPage
           .actions-liste { display: flex; gap: .5rem; flex-wrap: wrap; }
           form { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
           form label { display: flex; flex-direction: column; gap: .25rem; font-size: .72rem; color: var(--doux); }
+          .grille-reglages { display: grid; grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); gap: .8rem; align-items: end; }
+          .grille-reglages input[type=number] { width: 100%; }
+          .grille-reglages .interrupteur { flex-direction: row; align-items: center; gap: .5rem; font-size: .9rem; color: var(--texte); padding-bottom: .45rem; }
+          .grille-reglages .interrupteur input { accent-color: var(--nacre); width: 1rem; height: 1rem; margin: 0; }
+          input:invalid { border-color: var(--alerte); }
           .vide { color: var(--doux); font-size: .88rem; font-style: italic; }
           .mise-en-garde {
             display: flex; gap: .6rem; color: var(--doux); font-size: .85rem;
@@ -305,6 +310,34 @@ public static class AdminPage
                 « Vérifier » dérive l'empreinte et dit si elle est listée, sans rien écrire.
                 L'import fusionne par empreinte une liste exportée par un service qui partage le même sel.
               </p>
+            </div>
+          </div>
+          <h2>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h10M18 6h2M4 12h2M10 12h10M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="8" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg>
+            Réglages <span class="compte" id="etatReglages"></span>
+          </h2>
+          <div class="panneau">
+            <div class="mise-en-garde">
+              <span>
+                Appliqués à chaud et écrits dans <code id="fichierReglages">settings.json</code>, qui surcharge la ligne de
+                commande au prochain démarrage. Supprimer le fichier rend la main à la ligne de commande.
+              </span>
+            </div>
+            <div>
+              <form id="reglages" class="grille-reglages" onsubmit="enregistrerReglages(event)">
+                <label>Annonces par minute et par adresse <input name="announcementsPerMinute" type="number" required></label>
+                <label>Connexions, toutes adresses <input name="maxConnections" type="number" required></label>
+                <label>Connexions par adresse <input name="maxConnectionsPerAddress" type="number" required></label>
+                <label>Boîtes par connexion <input name="maxMailboxesPerSession" type="number" required></label>
+                <label>Jetons en attente par connexion <input name="maxWaitingKeysPerSession" type="number" required></label>
+                <label>Invitations en attente, au total <input name="maxInvitations" type="number" required></label>
+                <label>Invitations en attente par adresse <input name="maxInvitationsPerAddress" type="number" required></label>
+                <label class="interrupteur"><input name="relayEnabled" type="checkbox"> Relais actif</label>
+                <span class="actions-liste" style="align-self:end">
+                  <button type="button" onclick="chargerReglages()">Recharger</button>
+                  <button type="submit" class="primaire">Enregistrer</button>
+                </span>
+              </form>
             </div>
           </div>
         </main>
@@ -659,7 +692,47 @@ public static class AdminPage
         // Une page laissée ouverte dans un onglet de fond n'a rien à interroger.
         document.addEventListener("visibilitychange", () => { if (!document.hidden) rafraichir(); });
         setInterval(() => { if (!document.hidden) rafraichir(); }, 5000);
+        // Les réglages se lisent une fois, et sur demande : ils ne bougent que
+        // depuis cette page, et un rafraîchissement périodique écraserait ce
+        // que l'opérateur est en train de taper.
+        async function chargerReglages() {
+          const r = await appel("/api/settings", "GET");
+          if (!r || !r.ok) return;
+          const s = await r.json();
+          const form = $("reglages");
+          for (const [nom, valeur] of Object.entries(s.values)) {
+            const champ = form.elements[nom];
+            if (!champ) continue;
+            if (champ.type === "checkbox") champ.checked = valeur;
+            else {
+              champ.value = valeur;
+              const borne = s.bounds[nom];
+              if (borne) { champ.min = borne.min; champ.max = borne.max; champ.title = "entre " + borne.min + " et " + borne.max; }
+            }
+          }
+          $("fichierReglages").textContent = s.file;
+          $("etatReglages").textContent = s.persisted ? "surchargés par " + s.file : "valeurs de la ligne de commande";
+        }
+
+        async function enregistrerReglages(e) {
+          e.preventDefault();
+          const form = $("reglages");
+          if (!form.reportValidity()) return;
+          const corps = {};
+          for (const champ of form.elements) {
+            if (!champ.name) continue;
+            corps[champ.name] = champ.type === "checkbox" ? champ.checked : parseInt(champ.value, 10);
+          }
+          const r = await appel("/api/settings", "PUT", corps);
+          if (!r) return;
+          const reponse = await r.json().catch(() => ({}));
+          if (!r.ok) { toast(reponse.error || "refusé (" + r.status + ")", true); return; }
+          toast("réglages appliqués et enregistrés");
+          await chargerReglages();
+        }
+
         chargerMondes();
+        chargerReglages();
         rafraichir();
         </script>
         </body>

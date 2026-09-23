@@ -57,9 +57,17 @@ public sealed class AdminServerTests : IAsyncLifetime
         var port = FreePort();
         _root = $"http://127.0.0.1:{port}";
 
-        _running = new AdminServer(localOnly: true, port, servicePort, _token, _service, _directory, _bans, new ManualClock())
+        _settings = new SettingsStore(Path.Combine(_dir, "settings.json"));
+
+        _running = new AdminServer(localOnly: true, port, servicePort, _token, _service, _directory, _bans, _settings, new ManualClock())
+            {
+                Log = _log,
+            }
             .RunAsync(_stopping.Token);
     }
+
+    private SettingsStore _settings = null!;
+    private readonly StringWriter _log = new();
 
     public async Task DisposeAsync()
     {
@@ -267,7 +275,7 @@ public sealed class AdminServerTests : IAsyncLifetime
         var port = FreePort();
 
         using var stopping = new CancellationTokenSource();
-        var running = new AdminServer(localOnly: true, port, 0, _token, idle, _directory, _bans, new ManualClock())
+        var running = new AdminServer(localOnly: true, port, 0, _token, idle, _directory, _bans, _settings, new ManualClock())
             .RunAsync(stopping.Token);
 
         var response = await _client.GetAsync($"http://127.0.0.1:{port}/healthz");
@@ -453,6 +461,71 @@ public sealed class AdminServerTests : IAsyncLifetime
     public async Task Limport_dune_liste_illisible_rend_400()
         => Assert.Equal(HttpStatusCode.BadRequest,
             (await SendAsync(HttpMethod.Post, "/api/bans/import", body: """{"version":99}""")).StatusCode);
+
+    [Fact]
+    public async Task Les_reglages_se_lisent_avec_leurs_bornes()
+    {
+        var response = await SendAsync(HttpMethod.Get, "/api/settings");
+        var document = JsonNode.Parse(await response.Content.ReadAsStringAsync())!;
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(RendezvousLimits.Default.AnnouncementsPerMinute, document["values"]!["announcementsPerMinute"]!.GetValue<int>());
+        Assert.True(document["values"]!["relayEnabled"]!.GetValue<bool>());
+        Assert.Equal(1, document["bounds"]!["maxConnections"]!["min"]!.GetValue<int>());
+        Assert.False(document["persisted"]!.GetValue<bool>());
+    }
+
+    [Fact]
+    public async Task Un_reglage_change_sapplique_a_chaud_se_persiste_et_se_journalise_sans_adresse()
+    {
+        var response = await SendAsync(HttpMethod.Put, "/api/settings",
+            body: """{"announcementsPerMinute": 120, "relayEnabled": false}""");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(120, _service.Limits.AnnouncementsPerMinute);
+        Assert.False(_service.Limits.RelayEnabled);
+        Assert.Equal(RendezvousLimits.Default.MaxConnections, _service.Limits.MaxConnections);
+
+        // Relu au redémarrage : le fichier surcharge la ligne de commande.
+        var reloaded = new SettingsStore(Path.Combine(_dir, "settings.json"))
+            .Load(new RendezvousLimits { AnnouncementsPerMinute = 60 }, TextWriter.Null);
+
+        Assert.Equal(120, reloaded.AnnouncementsPerMinute);
+        Assert.False(reloaded.RelayEnabled);
+        Assert.Empty(Directory.GetFiles(_dir, "*.tmp"));
+
+        Assert.Contains("announcementsPerMinute 60 -> 120", _log.ToString());
+        Assert.Contains("relayEnabled true -> false", _log.ToString());
+        Assert.DoesNotContain("127.0.0.1", _log.ToString());
+    }
+
+    [Theory]
+    [InlineData("""{"announcementsPerMinute": 0}""")]
+    [InlineData("""{"maxConnections": -1}""")]
+    [InlineData("""{"maxMailboxesPerSession": 100000}""")]
+    [InlineData("""{"relayEnabled": "non"}""")]
+    [InlineData("""{"inconnu": 3}""")]
+    [InlineData("""[1, 2]""")]
+    public async Task Un_reglage_hors_bornes_est_refuse_sans_rien_changer(string body)
+    {
+        var before = _service.Limits;
+
+        var response = await SendAsync(HttpMethod.Put, "/api/settings", body: body);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Same(before, _service.Limits);
+        Assert.False(File.Exists(Path.Combine(_dir, "settings.json")));
+    }
+
+    [Fact]
+    public async Task Un_reglage_venu_dun_autre_site_est_refuse()
+    {
+        var request = Request(HttpMethod.Put, "/api/settings", """{"announcementsPerMinute": 120}""");
+        request.Headers.Add("Sec-Fetch-Site", "cross-site");
+
+        Assert.Equal(HttpStatusCode.Forbidden, (await _client.SendAsync(request)).StatusCode);
+        Assert.Equal(RendezvousLimits.Default.AnnouncementsPerMinute, _service.Limits.AnnouncementsPerMinute);
+    }
 
     [Fact]
     public async Task Un_bannissement_sans_nom_est_refuse()

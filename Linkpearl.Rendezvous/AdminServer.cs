@@ -30,7 +30,7 @@ namespace Linkpearl.Rendezvous;
 /// </remarks>
 public sealed class AdminServer(
     bool localOnly, int adminPort, int servicePort, string token,
-    RendezvousServer service, PeerDirectory directory, BanStore bans, IClock clock)
+    RendezvousServer service, PeerDirectory directory, BanStore bans, SettingsStore settings, IClock clock)
 {
     /// <summary>La version, sans l'empreinte de commit que le SDK y accole.</summary>
     private static readonly string Version =
@@ -159,7 +159,7 @@ public sealed class AdminServer(
 
         _failures.Clear(Origin(context));
 
-        if (method is "POST" or "DELETE")
+        if (method is "POST" or "DELETE" or "PUT")
         {
             // Le navigateur rejoue l'authentification basique sur toute requête
             // vers cette origine, y compris celles qu'une page tierce lui fait
@@ -228,6 +228,43 @@ public sealed class AdminServer(
             case ("/api/worlds", "GET"):
                 Respond(context, 200, "application/json", WorldsJson());
                 return;
+
+            case ("/api/settings", "GET"):
+                Respond(context, 200, "application/json", SettingsJson());
+                return;
+
+            case ("/api/settings", "PUT"):
+            {
+                var body = await BodyAsync(context).ConfigureAwait(false);
+
+                if (body is null)
+                {
+                    Respond(context, 400, "application/json", """{"error":"le corps doit être un objet JSON"}""");
+                    return;
+                }
+
+                // Validé en entier avant d'être appliqué, puis appliqué d'un
+                // bloc : chaque chemin de code du service lit une copie des
+                // plafonds au début de son travail, donc rien ne change à moitié.
+                var before = service.Limits;
+
+                if (SettingsStore.TryApply(before, body, out var after, out var why) is false)
+                {
+                    Respond(context, 400, "application/json", new JsonObject { ["error"] = why }.ToJsonString());
+                    return;
+                }
+
+                service.Limits = after;
+                settings.Save(after);
+
+                // Le journal dit ce qui a changé, jamais depuis où : c'est un
+                // fichier qui reste.
+                foreach (var change in SettingsStore.Changes(before, after))
+                    Log.WriteLine($"Réglage modifié depuis la console : {change}");
+
+                Respond(context, 200, "application/json", SettingsJson());
+                return;
+            }
 
             case ("/api/bans/verify", "POST"):
             {
@@ -544,6 +581,22 @@ public sealed class AdminServer(
     /// <summary>Le champ « world » tel qu'il est venu : un nombre ou une chaîne, les deux se lisent.</summary>
     private static string? WorldText(JsonObject? body)
         => body?["world"] is JsonValue value ? value.ToString() : null;
+
+    private string SettingsJson()
+    {
+        var bounds = new JsonObject();
+
+        foreach (var bound in SettingsStore.Bounds)
+            bounds[bound.Name] = new JsonObject { ["min"] = bound.Min, ["max"] = bound.Max };
+
+        return new JsonObject
+        {
+            ["values"] = SettingsStore.ToJson(service.Limits),
+            ["bounds"] = bounds,
+            ["file"] = Path.GetFileName(settings.Path),
+            ["persisted"] = File.Exists(settings.Path),
+        }.ToJsonString();
+    }
 
     private static string WorldsJson()
     {

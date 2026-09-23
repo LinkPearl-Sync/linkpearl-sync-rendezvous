@@ -605,6 +605,15 @@ public sealed class RendezvousServer(
         if (frame.Length != 1 + RendezvousTicket.SizeInBytes)
             return false;
 
+        // Coupé depuis la console : refusé sans compter dans le limiteur et
+        // sans couper la session, qui a peut-être des boîtes ouvertes. Le
+        // plugin lit cette erreur comme un relais indisponible.
+        if (Limits.RelayEnabled is false)
+        {
+            await session.SendAsync(RendezvousWire.Error("relais coupé sur ce service"), ct).ConfigureAwait(false);
+            return true;
+        }
+
         // Comptée comme une annonce : une demande de relais gare une socket
         // jusqu'à l'expiration, et c'est la trame la plus coûteuse à offrir.
         if (RateExceeded(session.Bucket, ref _refusedRelays))

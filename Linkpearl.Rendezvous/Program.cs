@@ -61,6 +61,8 @@ if (args.Contains("--help"))
         --admin-token fichier du jeton. Engendré au premier démarrage, à lire
                       dans le fichier : admin.token par défaut.
         --bans        fichier de la liste de bannissement. bans.json par défaut.
+        --settings    fichier des réglages changés depuis la console. settings.json
+                      par défaut ; s'il existe, il surcharge --rate et les plafonds.
         """);
     return;
 }
@@ -108,7 +110,10 @@ foreach (var target in ArgAll("--announce-to"))
         stopping.Token);
 }
 
-var limits = new RendezvousLimits { AnnouncementsPerMinute = rate };
+// La ligne de commande donne le départ ; settings.json, écrit depuis la
+// console, la surcharge s'il existe. Sans fichier, rien ne change.
+var settings = new SettingsStore(ArgString("--settings", "settings.json"));
+var limits = settings.Load(new RendezvousLimits { AnnouncementsPerMinute = rate }, Console.Out);
 var service = new RendezvousServer(port, directory, limits, clock, verbose: args.Contains("--verbose"));
 var bans = new BanStore(ArgString("--bans", "bans.json"));
 
@@ -123,7 +128,7 @@ if (args.Contains("--no-admin") is false)
 {
     var token = AdminToken.LoadOrCreate(ArgString("--admin-token", "admin.token"));
     var admin = new AdminServer(
-        ArgString("--admin-allow", "local") is not "any", adminPort, port, token, service, directory, bans, clock);
+        ArgString("--admin-allow", "local") is not "any", adminPort, port, token, service, directory, bans, settings, clock);
 
     running.Add(admin.RunAsync(stopping.Token));
 }

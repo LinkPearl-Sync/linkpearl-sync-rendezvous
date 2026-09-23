@@ -619,3 +619,50 @@ public sealed class HealthTests
         Assert.Equal(1, harness.Server.Snapshot().RateRefusals);
     }
 }
+
+/// <summary>Le relais coupé depuis la console.</summary>
+public sealed class RelaySwitchTests
+{
+    private static readonly TimeSpan Short = TimeSpan.FromMilliseconds(400);
+
+    private static byte[] Ticket(byte seed) => Enumerable.Repeat(seed, RendezvousTicket.SizeInBytes).ToArray();
+
+    [Fact]
+    public async Task Relais_coupe_la_demande_recoit_une_erreur_et_la_session_continue()
+    {
+        await using var harness = await ServerHarness.StartAsync(new RendezvousLimits { RelayEnabled = false });
+
+        var client = await harness.ConnectAsync();
+        await client.SendAsync(RendezvousWire.RelayOpen(Ticket(0x11)));
+
+        var frame = await client.ReadFrameAsync();
+
+        Assert.Equal(RendezvousKind.Error, frame![0]);
+        Assert.Contains("relais", System.Text.Encoding.UTF8.GetString(frame, 1, frame.Length - 1));
+        Assert.Equal(0, harness.Server.Snapshot().RelayWaiting);
+
+        // La connexion tient, et le refus n'a pas compté dans le limiteur.
+        await client.SendAsync(RendezvousWire.MailboxOpen([new byte[RendezvousWire.MailboxAddressSize]]));
+        Assert.True(await client.IsSilentAsync(Short));
+        Assert.Equal(1, harness.Server.Snapshot().OpenMailboxes);
+        Assert.Equal(0, harness.Server.Snapshot().Refusals.Relay);
+    }
+
+    [Fact]
+    public async Task Le_relais_se_coupe_et_se_rouvre_a_chaud()
+    {
+        await using var harness = await ServerHarness.StartAsync();
+
+        harness.Server.Limits = harness.Server.Limits with { RelayEnabled = false };
+
+        var client = await harness.ConnectAsync();
+        await client.SendAsync(RendezvousWire.RelayOpen(Ticket(0x11)));
+        Assert.Equal(RendezvousKind.Error, (await client.ReadFrameAsync())![0]);
+
+        harness.Server.Limits = harness.Server.Limits with { RelayEnabled = true };
+
+        await client.SendAsync(RendezvousWire.RelayOpen(Ticket(0x12)));
+        Assert.True(await client.IsSilentAsync(Short));
+        Assert.Equal(1, harness.Server.Snapshot().RelayWaiting);
+    }
+}

@@ -54,6 +54,18 @@ public sealed record RendezvousLimits
     public int MaxInvitationsPerAddress { get; init; } = 32;
 
     /// <summary>
+    /// Si le service accepte de relayer.
+    /// </summary>
+    /// <remarks>
+    /// Le relais est ce qui coûte de la bande passante à l'opérateur, et la
+    /// seule chose qu'il peut vouloir couper sans arrêter le reste : un
+    /// service qui ne relaie plus apparie encore, et les pairs qui se
+    /// joignent en direct ne voient rien. Coupé, une demande de relais
+    /// reçoit une erreur et la connexion continue.
+    /// </remarks>
+    public bool RelayEnabled { get; init; } = true;
+
+    /// <summary>
     /// Temps pendant lequel une demande de relais attend son pair.
     /// </summary>
     /// <remarks>
