@@ -30,7 +30,25 @@ dotnet test Linkpearl.Rendezvous.Tests/Linkpearl.Rendezvous.Tests.csproj
 
 `--port` sert en TCP et en UDP. 443 est un choix raisonnable pour les réseaux restrictifs,
 la charge utile étant de toute façon chiffrée de bout en bout par les pairs eux-mêmes.
-`--rate` borne les annonces par minute et par adresse.
+`--rate` borne les annonces par minute et par adresse, un /64 comptant pour une adresse en
+IPv6.
+
+Le journal dit ce qui se passe, jamais à qui : ni adresse IP, ni fragment de jeton ou de
+boîte, parce qu'un journal est un fichier qui reste, relu et copié. `--verbose` rend le
+détail, adresses comprises, pour diagnostiquer une soirée ; le ticket d'invitation
+n'apparaît dans aucun des deux modes.
+
+## Ce qui est sur le disque
+
+Rien de ce que le rendez-vous fait : les jetons, les attentes, les boîtes ouvertes et les
+invitations déposées vivent en mémoire et disparaissent avec le processus. Redémarrer
+n'efface donc aucune trace d'usage, puisqu'il n'y en a pas.
+
+Ce que l'opérateur configure, en revanche, est sur le disque : `peers.txt` et `pending.txt`
+pour l'annuaire, `bans.json` pour la liste de bannissement, `admin.token` pour la console.
+Ces fichiers se réécrivent d'un bloc, à côté puis renommés, pour qu'une coupure laisse
+l'ancien contenu plutôt qu'un fichier tronqué. Le jeton est créé lisible par son seul
+propriétaire.
 
 ## La console
 
@@ -43,8 +61,9 @@ lprdv --port 47900 --admin-allow any           # console ouverte à tous, à év
 lprdv --port 47900 --no-admin                  # pas de console du tout
 ```
 
-Au premier démarrage, le service écrit un jeton aléatoire dans `admin.token` et le
-journalise une fois. Le navigateur le demande avant d'afficher quoi que ce soit, dans sa
+Au premier démarrage, le service écrit un jeton aléatoire dans `admin.token` et journalise
+le chemin du fichier, jamais le jeton lui-même : c'est là qu'on le lit. Le navigateur le
+demande avant d'afficher quoi que ce soit, dans sa
 propre boîte de dialogue : n'importe quel identifiant, et le jeton comme mot de passe. Il le
 renvoie ensuite tout seul, donc la page n'a ni champ à remplir ni secret à stocker. Le perdre
 se répare en supprimant le fichier.
@@ -68,6 +87,12 @@ port de la console reste utile à qui veut la ceinture et les bretelles.
 
 Aucun nom de personnage n'apparaît nulle part sur cette page, et ce n'est pas une précaution
 d'affichage : le service n'en connaît aucun.
+
+Le navigateur rejoue l'authentification basique sur toute requête vers la console, y compris
+celles qu'une page tierce lui ferait envoyer. Les mutations (`POST`, `DELETE`) sont donc
+refusées quand `Sec-Fetch-Site` dit `cross-site`, et quand le corps n'est pas en
+`application/json`, le seul type qu'un formulaire HTML ne sait pas produire. En ligne de
+commande, envoyer ce `Content-Type` suffit.
 
 ## La modération
 

@@ -6,7 +6,9 @@ using Linkpearl.Rendezvous;
 //
 // Il ne voit ni clé publique, ni nom de personnage, ni manifeste, ni fichier :
 // seulement des adresses IP et des jetons opaques qui tournent toutes les dix
-// minutes. Voir docs/threat-model.md.
+// minutes. Ce qu'il apprend et ce qu'il refuse d'apprendre sont écrits dans le
+// README (« Ce qu'il ne voit pas ») et dans la conception du plugin,
+// docs/superpowers/specs/2026-09-22-linkpearl-design.md dans son dépôt.
 
 var port = 47900;
 var rate = 60;

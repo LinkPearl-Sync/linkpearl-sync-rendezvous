@@ -27,8 +27,11 @@ namespace Linkpearl.Rendezvous;
 /// personnage, ni manifeste, ni fichier. Un observateur ne peut pas relier deux
 /// fenêtres entre elles.
 ///
-/// Aucun état n'est persisté. Redémarrer le service n'efface rien puisqu'il n'y
-/// a rien à effacer.
+/// Rien de ce qu'il fait n'est persisté : jetons, attentes, boîtes et
+/// invitations vivent en mémoire et disparaissent avec le processus. Ce que
+/// l'opérateur configure vit sur le disque, à côté : l'annuaire
+/// (<see cref="PeerDirectory"/>), la liste de bannissement
+/// (<see cref="BanStore"/>) et le jeton de la console (<see cref="AdminToken"/>).
 /// </remarks>
 public sealed class RendezvousServer(
     int requestedPort, PeerDirectory directory, RendezvousLimits limits, IClock clock, bool verbose = false)
@@ -163,8 +166,8 @@ public sealed class RendezvousServer(
     /// Une adresse de boîte dérive du nom de personnage, donc ce registre dit de
     /// fait qui est en ligne. C'est le prix assumé de la découvrabilité : un
     /// inconnu ne peut pas reconnaître quelqu'un sans que le serveur le puisse
-    /// aussi. Rien n'est persisté, et l'adresse tourne toutes les trente
-    /// minutes, ce qui empêche de relier deux périodes.
+    /// aussi. Ce registre ne quitte jamais la mémoire, et l'adresse tourne
+    /// toutes les trente minutes, ce qui empêche de relier deux périodes.
     ///
     /// Plusieurs sessions par boîte : deux clients sur la même machine, ou une
     /// reconnexion dont l'ancienne session n'est pas encore tombée. Une seule

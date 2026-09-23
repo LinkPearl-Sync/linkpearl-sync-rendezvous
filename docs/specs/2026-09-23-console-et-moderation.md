@@ -47,7 +47,9 @@ une pile entière à un service qui en fait sept cents lignes.
 ### Le jeton est engendré, jamais choisi
 
 Au premier démarrage, le service écrit un jeton aléatoire de trente-deux octets
-dans `admin.token`, en le journalisant une fois. Aucun mot de passe par défaut,
+dans `admin.token`, lisible par son seul propriétaire, et ne journalise que le
+chemin du fichier (le journaliser lui-même le copierait dans tout rapport où
+le journal est collé). Aucun mot de passe par défaut,
 aucune valeur devinable, et rien à retenir. Le perdre se répare en supprimant le
 fichier.
 

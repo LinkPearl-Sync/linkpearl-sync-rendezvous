@@ -30,7 +30,7 @@ et son `docs/reprise.md` avant toute décision qui touche au protocole.
 dotnet build Linkpearl.Rendezvous/Linkpearl.Rendezvous.csproj -c Release   # sans warning
 dotnet test Linkpearl.Rendezvous.Tests/Linkpearl.Rendezvous.Tests.csproj
 
-# La console, en local : le jeton est journalisé au premier démarrage.
+# La console, en local : le jeton est dans admin.token, engendré au premier démarrage.
 dotnet run --project Linkpearl.Rendezvous -- --port 47900 --admin-port 47901
 ```
 
