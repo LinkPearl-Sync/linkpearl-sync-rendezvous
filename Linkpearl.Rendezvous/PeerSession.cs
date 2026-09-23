@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
 using Linkpearl.Core.Transport.Rendezvous;
@@ -10,15 +11,48 @@ public sealed class PeerSession(TcpClient client) : IDisposable
 {
     private readonly NetworkStream _stream = client.GetStream();
     private readonly SemaphoreSlim _sending = new(1);
-    private readonly List<string> _keys = [];
 
-    private readonly List<string> _mailboxes = [];
+    // Des ensembles concurrents et non des listes : le balayage et l'appariement
+    // par une autre session retirent des clés pendant que la boucle de service
+    // en ajoute.
+    private readonly ConcurrentDictionary<string, byte> _keys = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, byte> _mailboxes = new(StringComparer.Ordinal);
 
-    public IReadOnlyList<string> Keys => _keys;
+    /// <summary>
+    /// L'adresse distante, capturée à la construction.
+    /// </summary>
+    /// <remarks>
+    /// Lue sur la socket au moment où elle est encore ouverte : le journal et
+    /// l'oubli des attentes en ont besoin après la fermeture, et la socket
+    /// lève alors au lieu de répondre.
+    /// </remarks>
+    private readonly IPAddress _remote = RemoteOf(client);
 
-    public IReadOnlyList<string> Mailboxes => _mailboxes;
+    public string Address => _remote.ToString();
 
-    public void RememberMailbox(string key) => _mailboxes.Add(key);
+    public Socket Socket => client.Client;
+
+    /// <summary>La clé sous laquelle le limiteur compte cette connexion.</summary>
+    public string Bucket { get; } = AddressBucket.Of(RemoteOf(client));
+
+    /// <summary>Les jetons sur lesquels cette session attend, annonce ou relais.</summary>
+    public ICollection<string> Keys => _keys.Keys;
+
+    public int KeyCount => _keys.Count;
+
+    public bool HasKey(string key) => _keys.ContainsKey(key);
+
+    public void Remember(string key) => _keys[key] = 0;
+
+    public void ForgetKey(string key) => _keys.TryRemove(key, out _);
+
+    public ICollection<string> Mailboxes => _mailboxes.Keys;
+
+    public int MailboxCount => _mailboxes.Count;
+
+    public bool HasMailbox(string key) => _mailboxes.ContainsKey(key);
+
+    public void RememberMailbox(string key) => _mailboxes[key] = 0;
 
     private readonly TaskCompletionSource _relayFinished =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -47,12 +81,30 @@ public sealed class PeerSession(TcpClient client) : IDisposable
 
     public void ReleaseFromRelay() => _relayFinished.TrySetResult();
 
-    public string Address =>
-        client.Client.RemoteEndPoint is IPEndPoint endpoint
-            ? (endpoint.Address.IsIPv4MappedToIPv6 ? endpoint.Address.MapToIPv4() : endpoint.Address).ToString()
-            : "inconnue";
-
-    public void Remember(string key) => _keys.Add(key);
+    /// <summary>
+    /// Arme le keepalive TCP sur une socket acceptée.
+    /// </summary>
+    /// <remarks>
+    /// Sans lui, une connexion morte sans FIN (câble tiré, veille, NAT qui a
+    /// oublié le flux) reste ouverte côté serveur jusqu'à ce que le noyau
+    /// abandonne, ce qui se compte en heures : la boîte reste ouverte sur un
+    /// joueur parti et le descripteur reste pris. Au mieux de ce que la plateforme
+    /// accepte : un noyau qui refuse un réglage n'empêche pas de servir.
+    /// </remarks>
+    public static void Harden(Socket socket, RendezvousLimits limits)
+    {
+        try
+        {
+            socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive, true);
+            socket.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.TcpKeepAliveTime, (int)limits.KeepAliveTime.TotalSeconds);
+            socket.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.TcpKeepAliveInterval, (int)limits.KeepAliveInterval.TotalSeconds);
+            socket.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.TcpKeepAliveRetryCount, limits.KeepAliveRetryCount);
+        }
+        catch (SocketException)
+        {
+            // Plateforme sans ces options : on sert quand même.
+        }
+    }
 
     public async Task<byte[]?> ReadFrameAsync(CancellationToken ct)
     {
@@ -81,6 +133,28 @@ public sealed class PeerSession(TcpClient client) : IDisposable
         finally
         {
             _sending.Release();
+        }
+    }
+
+    /// <summary>
+    /// Envoie à une autre session que la sienne, sans que son échec nous atteigne.
+    /// </summary>
+    /// <remarks>
+    /// Un partenaire parti entre son annonce et la nôtre, ou un destinataire de
+    /// boîte dont la socket vient de mourir, ferait lever l'envoi dans la
+    /// boucle de service de celui qui parle : c'est lui qui serait coupé, pour
+    /// une faute qui n'est pas la sienne.
+    /// </remarks>
+    public async Task<bool> TrySendAsync(byte[] body, CancellationToken ct)
+    {
+        try
+        {
+            await SendAsync(body, ct).ConfigureAwait(false);
+            return true;
+        }
+        catch (Exception e) when (e is IOException or SocketException or ObjectDisposedException or OperationCanceledException)
+        {
+            return false;
         }
     }
 
@@ -169,6 +243,14 @@ public sealed class PeerSession(TcpClient client) : IDisposable
         }
 
         return true;
+    }
+
+    private static IPAddress RemoteOf(TcpClient client)
+    {
+        if (client.Client.RemoteEndPoint is not IPEndPoint endpoint)
+            return IPAddress.None;
+
+        return endpoint.Address.IsIPv4MappedToIPv6 ? endpoint.Address.MapToIPv4() : endpoint.Address;
     }
 
     public void Dispose()

@@ -72,3 +72,89 @@ public sealed class RendezvousServerTests
         Assert.Equal(0, harness.Server.Snapshot().PendingAnnouncements);
     }
 }
+
+/// <summary>Ce qu'une connexion doit faire pour être gardée.</summary>
+public sealed class ConnectionLimitTests
+{
+    private static readonly TimeSpan Short = TimeSpan.FromMilliseconds(400);
+
+    [Fact]
+    public async Task Une_connexion_muette_est_fermee_apres_le_delai()
+    {
+        // Se connecter et se taire par milliers épuiserait la table des
+        // descripteurs sans jamais envoyer un octet.
+        await using var harness = await ServerHarness.StartAsync(
+            new RendezvousLimits { FirstFrameTimeout = TimeSpan.FromMilliseconds(300) });
+
+        var mute = await harness.ConnectAsync();
+
+        Assert.True(await mute.IsClosedAsync(TimeSpan.FromSeconds(5)));
+    }
+
+    [Fact]
+    public async Task Une_connexion_qui_parle_reste_ouverte_au_dela_du_delai()
+    {
+        await using var harness = await ServerHarness.StartAsync(
+            new RendezvousLimits { FirstFrameTimeout = TimeSpan.FromMilliseconds(300) });
+
+        var talker = await harness.ConnectAsync();
+        await talker.SendAsync(RendezvousWire.MailboxOpen([new byte[RendezvousWire.MailboxAddressSize]]));
+
+        Assert.True(await talker.IsSilentAsync(TimeSpan.FromMilliseconds(800)));
+    }
+
+    [Fact]
+    public async Task Au_dela_du_plafond_par_adresse_la_connexion_est_fermee()
+    {
+        await using var harness = await ServerHarness.StartAsync(
+            new RendezvousLimits { MaxConnectionsPerAddress = 2 });
+
+        var first = await harness.ConnectAsync();
+        var second = await harness.ConnectAsync();
+        var third = await harness.ConnectAsync();
+
+        Assert.True(await third.IsClosedAsync(TimeSpan.FromSeconds(5)));
+        Assert.True(await first.IsSilentAsync(Short));
+        Assert.True(await second.IsSilentAsync(Short));
+        Assert.Equal(1, harness.Server.Snapshot().RefusedConnections);
+    }
+
+    [Fact]
+    public async Task Au_dela_du_plafond_global_la_connexion_est_fermee()
+    {
+        await using var harness = await ServerHarness.StartAsync(
+            new RendezvousLimits { MaxConnections = 2 });
+
+        var first = await harness.ConnectAsync();
+        var second = await harness.ConnectAsync();
+        var third = await harness.ConnectAsync();
+
+        Assert.True(await third.IsClosedAsync(TimeSpan.FromSeconds(5)));
+        Assert.True(await first.IsSilentAsync(Short));
+        Assert.True(await second.IsSilentAsync(Short));
+    }
+
+    [Fact]
+    public async Task Une_place_liberee_se_reprend()
+    {
+        await using var harness = await ServerHarness.StartAsync(
+            new RendezvousLimits { MaxConnectionsPerAddress = 1 });
+
+        var first = await harness.ConnectAsync();
+        await first.SendAsync(RendezvousWire.MailboxOpen([new byte[RendezvousWire.MailboxAddressSize]]));
+        Assert.True(await first.IsSilentAsync(Short));
+        Assert.Equal(1, harness.Server.Snapshot().Connections);
+
+        first.Dispose();
+
+        // Le service constate le départ en lisant la fin du flux, ce qui prend
+        // un instant : on attend que le compteur retombe avant de réessayer.
+        for (var i = 0; i < 50 && harness.Server.Snapshot().Connections > 0; i++)
+            await Task.Delay(20);
+
+        var second = await harness.ConnectAsync();
+        await second.SendAsync(RendezvousWire.MailboxOpen([new byte[RendezvousWire.MailboxAddressSize]]));
+
+        Assert.True(await second.IsSilentAsync(Short));
+    }
+}

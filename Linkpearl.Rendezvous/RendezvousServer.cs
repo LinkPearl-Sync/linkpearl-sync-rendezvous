@@ -71,11 +71,19 @@ public sealed class RendezvousServer(int requestedPort, PeerDirectory directory,
     /// </remarks>
     public sealed record Counters(
         int OpenMailboxes, int PendingAnnouncements, long Matches, long RelayedBytes,
+        int Connections, long RefusedConnections,
         int KnownPeers, int PendingSubmissions);
 
     public Counters Snapshot() => new(
         _mailboxes.Count, _waiting.Count, Matched, PeerSession.TotalRelayedBytes,
+        Volatile.Read(ref _connections), Interlocked.Read(ref _refusedConnections),
         directory.Known().Count, directory.Pending().Count);
+
+    private int _connections;
+    private long _refusedConnections;
+
+    /// <summary>Connexions tenues par seau d'adresses, pour le plafond par adresse.</summary>
+    private readonly ConcurrentDictionary<string, int> _connectionsPerBucket = new(StringComparer.Ordinal);
 
     private sealed class Waiting
     {
@@ -157,8 +165,24 @@ public sealed class RendezvousServer(int requestedPort, PeerDirectory directory,
 
             while (ct.IsCancellationRequested is false)
             {
-                var client = await listener.AcceptTcpClientAsync(ct).ConfigureAwait(false);
-                _ = Task.Run(() => ServeAsync(client, ct), ct);
+                TcpClient client;
+
+                try
+                {
+                    client = await listener.AcceptTcpClientAsync(ct).ConfigureAwait(false);
+                }
+                catch (Exception e) when (ct.IsCancellationRequested is false)
+                {
+                    // Table des descripteurs pleine, ou connexion réinitialisée
+                    // avant d'être prise : une boucle qui mourrait ici laisserait
+                    // le service sourd tout en paraissant vivant. On souffle, le
+                    // temps qu'une session se termine, puis on reprend.
+                    Console.WriteLine($"Acceptation en échec ({e.GetType().Name}), reprise dans 100 ms.");
+                    await Task.Delay(100, ct).ConfigureAwait(false);
+                    continue;
+                }
+
+                Admit(client, ct);
             }
         }
         finally
@@ -207,15 +231,99 @@ public sealed class RendezvousServer(int requestedPort, PeerDirectory directory,
         }
     }
 
-    private async Task ServeAsync(TcpClient client, CancellationToken ct)
+    /// <summary>
+    /// Garde une connexion si les plafonds le permettent, la ferme sinon.
+    /// </summary>
+    /// <remarks>
+    /// Fermée sans un mot : écrire vers une socket qu'on refuse, c'est déjà
+    /// lui consacrer du travail, et c'est précisément ce qu'un flot de
+    /// connexions cherche à obtenir.
+    /// </remarks>
+    private void Admit(TcpClient client, CancellationToken ct)
     {
-        using var session = new PeerSession(client);
+        var session = new PeerSession(client);
 
+        if (TryReserve(session.Bucket) is false)
+        {
+            Interlocked.Increment(ref _refusedConnections);
+            session.Dispose();
+            return;
+        }
+
+        // Appelée et non confiée à Task.Run : une tâche annulée avant d'avoir
+        // démarré ne libérerait ni la place ni la socket.
+        _ = ServeAsync(session, ct);
+    }
+
+    private bool TryReserve(string bucket)
+    {
+        var limits = Limits;
+
+        if (Interlocked.Increment(ref _connections) > limits.MaxConnections)
+        {
+            Interlocked.Decrement(ref _connections);
+            return false;
+        }
+
+        if (_connectionsPerBucket.AddOrUpdate(bucket, 1, (_, held) => held + 1) > limits.MaxConnectionsPerAddress)
+        {
+            Release(bucket);
+            return false;
+        }
+
+        return true;
+    }
+
+    private void Release(string bucket)
+    {
+        Interlocked.Decrement(ref _connections);
+
+        // L'entrée disparaît à zéro : sans cela, le dictionnaire garderait une
+        // trace de chaque adresse jamais vue.
+        while (_connectionsPerBucket.TryGetValue(bucket, out var held))
+        {
+            if (held <= 1
+                ? _connectionsPerBucket.TryRemove(new KeyValuePair<string, int>(bucket, held))
+                : _connectionsPerBucket.TryUpdate(bucket, held - 1, held))
+                return;
+        }
+    }
+
+    private async Task ServeAsync(PeerSession session, CancellationToken ct)
+    {
         try
         {
+            PeerSession.Harden(session.Socket, Limits);
+
+            var first = true;
+
             while (ct.IsCancellationRequested is false)
             {
-                var frame = await session.ReadFrameAsync(ct).ConfigureAwait(false);
+                byte[]? frame;
+
+                if (first)
+                {
+                    // La première trame a un délai, les suivantes n'en ont pas :
+                    // une boîte reste ouverte des heures sans rien dire, et
+                    // c'est le keepalive qui constate sa mort.
+                    using var patience = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                    patience.CancelAfter(Limits.FirstFrameTimeout);
+
+                    try
+                    {
+                        frame = await session.ReadFrameAsync(patience.Token).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException) when (ct.IsCancellationRequested is false)
+                    {
+                        return;
+                    }
+
+                    first = false;
+                }
+                else
+                {
+                    frame = await session.ReadFrameAsync(ct).ConfigureAwait(false);
+                }
 
                 if (frame is null)
                     return;
@@ -253,13 +361,21 @@ public sealed class RendezvousServer(int requestedPort, PeerDirectory directory,
                     return;   // le pontage s'est déroulé dans cet appel
             }
         }
-        catch (Exception e) when (e is IOException or SocketException or OperationCanceledException)
+        catch (Exception e) when (e is IOException or SocketException or OperationCanceledException or ObjectDisposedException)
         {
             // Déconnexion ordinaire : rien à journaliser.
+        }
+        catch (Exception e)
+        {
+            // Tout le reste est une faute du service, pas du client, et une
+            // faute qu'on ne voit pas ne se corrige jamais.
+            Console.WriteLine($"Session en échec ({e.GetType().Name}) : {e.Message}");
         }
         finally
         {
             Forget(session);
+            Release(session.Bucket);
+            session.Dispose();
         }
     }
 
