@@ -40,7 +40,7 @@ public sealed class AdminServerTests : IAsyncLifetime
         var port = FreePort();
         _root = $"http://127.0.0.1:{port}";
 
-        var service = new RendezvousServer(47900, 60, _directory);
+        var service = new RendezvousServer(47900, _directory, RendezvousLimits.Default, new ManualClock());
         _running = new AdminServer(localOnly: true, port, 47900, _token, service, _directory, _bans)
             .RunAsync(_stopping.Token);
 

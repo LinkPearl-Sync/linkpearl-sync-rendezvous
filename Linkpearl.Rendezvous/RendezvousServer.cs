@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
+using Linkpearl.Core.Abstractions;
 using Linkpearl.Core.Transport.Rendezvous;
 
 namespace Linkpearl.Rendezvous;
@@ -29,8 +30,37 @@ namespace Linkpearl.Rendezvous;
 /// Aucun état n'est persisté. Redémarrer le service n'efface rien puisqu'il n'y
 /// a rien à effacer.
 /// </remarks>
-public sealed class RendezvousServer(int port, int maxAnnouncementsPerMinute, PeerDirectory directory)
+public sealed class RendezvousServer(int requestedPort, PeerDirectory directory, RendezvousLimits limits, IClock clock)
 {
+    private RendezvousLimits _limits = limits;
+
+    /// <summary>
+    /// Les plafonds en vigueur, remplaçables d'un bloc.
+    /// </summary>
+    /// <remarks>
+    /// Chaque chemin de code en prend une copie locale au début de son travail :
+    /// un réglage changé depuis la console ne s'applique donc jamais à moitié.
+    /// </remarks>
+    public RendezvousLimits Limits
+    {
+        get => Volatile.Read(ref _limits);
+        set => Volatile.Write(ref _limits, value);
+    }
+
+    /// <summary>Le port réellement lié, connu une fois l'écoute ouverte.</summary>
+    /// <remarks>
+    /// Un port zéro laisse le système en choisir un libre, ce qui permet à des
+    /// tests de faire tourner plusieurs services en parallèle sans se marcher
+    /// dessus. Ce port sert au TCP et à l'UDP, comme le port configuré.
+    /// </remarks>
+    public int Port { get; private set; }
+
+    private readonly TaskCompletionSource<int> _listening =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    /// <summary>Achevée quand le service accepte des connexions, avec le port lié.</summary>
+    public Task<int> Listening => _listening.Task;
+
     /// <summary>
     /// Ce que le service a fait depuis son démarrage.
     /// </summary>
@@ -51,12 +81,12 @@ public sealed class RendezvousServer(int port, int maxAnnouncementsPerMinute, Pe
     {
         public required PeerSession Session { get; init; }
         public required byte[] SealedCandidates { get; init; }
-        public required DateTime Since { get; init; }
+        public required DateTimeOffset Since { get; init; }
     }
 
     private readonly ConcurrentDictionary<string, Waiting> _waiting = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, PeerSession> _relayWaiting = new(StringComparer.Ordinal);
-    private readonly ConcurrentDictionary<string, (int Count, DateTime Window)> _rate = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, (int Count, DateTimeOffset Window)> _rate = new(StringComparer.Ordinal);
 
     /// <summary>
     /// Les invitations déposées, à usage unique.
@@ -68,7 +98,7 @@ public sealed class RendezvousServer(int port, int maxAnnouncementsPerMinute, Pe
     /// mots du handshake ; une fois la clé épinglée, le serveur n'a plus aucun
     /// pouvoir sur cette paire.
     /// </remarks>
-    private readonly ConcurrentDictionary<string, (byte[] Payload, DateTime Expiry)> _invitations =
+    private readonly ConcurrentDictionary<string, (byte[] Payload, DateTimeOffset Expiry)> _invitations =
         new(StringComparer.Ordinal);
 
     private static readonly TimeSpan InvitationLifetime = TimeSpan.FromHours(24);
@@ -90,25 +120,54 @@ public sealed class RendezvousServer(int port, int maxAnnouncementsPerMinute, Pe
 
     public async Task RunAsync(CancellationToken ct)
     {
-        var listener = new TcpListener(IPAddress.IPv6Any, port);
-        listener.Server.DualMode = true;
-        listener.Start();
+        TcpListener listener;
+        UdpClient reflection;
 
-        var reflection = new UdpClient(AddressFamily.InterNetworkV6);
-        reflection.Client.DualMode = true;
-        reflection.Client.Bind(new IPEndPoint(IPAddress.IPv6Any, port));
+        try
+        {
+            listener = new TcpListener(IPAddress.IPv6Any, requestedPort);
+            listener.Server.DualMode = true;
+            listener.Start();
 
-        Console.WriteLine($"Rendez-vous en écoute sur le port {port}, TCP et UDP, IPv4 et IPv6.");
+            // Le port lié et non le port demandé : avec zéro, c'est le système
+            // qui l'a choisi, et l'UDP doit suivre le TCP.
+            Port = ((IPEndPoint)listener.LocalEndpoint).Port;
+
+            reflection = new UdpClient(AddressFamily.InterNetworkV6);
+            reflection.Client.DualMode = true;
+            reflection.Client.Bind(new IPEndPoint(IPAddress.IPv6Any, Port));
+        }
+        catch (Exception e)
+        {
+            // Sans cela, qui attend l'écoute attendrait pour toujours.
+            _listening.TrySetException(e);
+            throw;
+        }
+
+        Console.WriteLine($"Rendez-vous en écoute sur le port {Port}, TCP et UDP, IPv4 et IPv6.");
         Console.WriteLine("Aucun état persisté, aucune base de données.");
         Console.WriteLine();
 
-        _ = Task.Run(() => ReflectAsync(reflection, ct), ct);
-        _ = Task.Run(() => ExpireAsync(ct), ct);
+        _listening.TrySetResult(Port);
 
-        while (ct.IsCancellationRequested is false)
+        try
         {
-            var client = await listener.AcceptTcpClientAsync(ct).ConfigureAwait(false);
-            _ = Task.Run(() => ServeAsync(client, ct), ct);
+            _ = Task.Run(() => ReflectAsync(reflection, ct), ct);
+            _ = Task.Run(() => ExpireAsync(ct), ct);
+
+            while (ct.IsCancellationRequested is false)
+            {
+                var client = await listener.AcceptTcpClientAsync(ct).ConfigureAwait(false);
+                _ = Task.Run(() => ServeAsync(client, ct), ct);
+            }
+        }
+        finally
+        {
+            // Rendre les ports tout de suite : un test qui enchaîne des
+            // services, ou un redémarrage rapide, ne doit pas tomber sur un
+            // port encore tenu par l'instance précédente.
+            listener.Stop();
+            reflection.Dispose();
         }
     }
 
@@ -263,7 +322,7 @@ public sealed class RendezvousServer(int port, int maxAnnouncementsPerMinute, Pe
             {
                 Session = session,
                 SealedCandidates = announcement.SealedCandidates,
-                Since = DateTime.UtcNow,
+                Since = clock.UtcNow,
             };
             session.Remember(key);
         }
@@ -321,7 +380,7 @@ public sealed class RendezvousServer(int port, int maxAnnouncementsPerMinute, Pe
 
         _invitations[key] = (
             frame.AsSpan(1 + RendezvousWire.InvitationTicketSize).ToArray(),
-            DateTime.UtcNow + InvitationLifetime);
+            clock.UtcNow + InvitationLifetime);
 
         Console.WriteLine($"[{key}] invitation déposée par {session.Address}");
 
@@ -345,7 +404,7 @@ public sealed class RendezvousServer(int port, int maxAnnouncementsPerMinute, Pe
         var key = Convert.ToHexStringLower(frame.AsSpan(1, RendezvousWire.InvitationTicketSize));
 
         // Usage unique : retiré à la première lecture, y compris s'il a expiré.
-        if (_invitations.TryRemove(key, out var invitation) is false || invitation.Expiry < DateTime.UtcNow)
+        if (_invitations.TryRemove(key, out var invitation) is false || invitation.Expiry < clock.UtcNow)
         {
             await session.SendAsync(RendezvousWire.Error("invitation inconnue, déjà utilisée ou expirée"), ct)
                          .ConfigureAwait(false);
@@ -440,7 +499,7 @@ public sealed class RendezvousServer(int port, int maxAnnouncementsPerMinute, Pe
 
     private bool RateExceeded(string address)
     {
-        var now = DateTime.UtcNow;
+        var now = clock.UtcNow;
         var entry = _rate.AddOrUpdate(
             address,
             _ => (1, now),
@@ -448,7 +507,7 @@ public sealed class RendezvousServer(int port, int maxAnnouncementsPerMinute, Pe
                 ? (1, now)
                 : (existing.Count + 1, existing.Window));
 
-        return entry.Count > maxAnnouncementsPerMinute;
+        return entry.Count > Limits.AnnouncementsPerMinute;
     }
 
     private void Forget(PeerSession session)
@@ -478,20 +537,30 @@ public sealed class RendezvousServer(int port, int maxAnnouncementsPerMinute, Pe
         while (ct.IsCancellationRequested is false)
         {
             await Task.Delay(TimeSpan.FromMinutes(1), ct).ConfigureAwait(false);
+            Sweep();
+        }
+    }
 
-            var deadline = DateTime.UtcNow - RendezvousTicket.Window;
+    /// <summary>Un passage du balayage, à l'heure de l'horloge injectée.</summary>
+    /// <remarks>
+    /// Public pour qu'un test le déclenche après avoir avancé l'horloge, au
+    /// lieu d'attendre la période pour de vrai.
+    /// </remarks>
+    public void Sweep()
+    {
+        var now = clock.UtcNow;
+        var deadline = now - RendezvousTicket.Window;
 
-            foreach (var (key, waiting) in _waiting)
-            {
-                if (waiting.Since < deadline)
-                    _waiting.TryRemove(key, out _);
-            }
+        foreach (var (key, waiting) in _waiting)
+        {
+            if (waiting.Since < deadline)
+                _waiting.TryRemove(key, out _);
+        }
 
-            foreach (var (key, invitation) in _invitations)
-            {
-                if (invitation.Expiry < DateTime.UtcNow)
-                    _invitations.TryRemove(key, out _);
-            }
+        foreach (var (key, invitation) in _invitations)
+        {
+            if (invitation.Expiry < now)
+                _invitations.TryRemove(key, out _);
         }
     }
 

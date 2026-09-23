@@ -103,7 +103,9 @@ foreach (var target in ArgAll("--announce-to"))
         stopping.Token);
 }
 
-var service = new RendezvousServer(port, rate, directory);
+var clock = new SystemClock();
+var limits = new RendezvousLimits { AnnouncementsPerMinute = rate };
+var service = new RendezvousServer(port, directory, limits, clock);
 var bans = new BanStore(ArgString("--bans", "bans.json"));
 
 // La liste est chargée tout de suite, et non à la première requête : c'est ce

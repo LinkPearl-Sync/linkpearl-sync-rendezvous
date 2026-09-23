@@ -134,7 +134,7 @@ public sealed class DirectoryTests : IDisposable
         // viendra plus tard, et les reconstituer après coup demanderait de
         // retoucher chaque chemin de code.
         var directory = New();
-        var server = new RendezvousServer(0, 60, directory);
+        var server = new RendezvousServer(0, directory, RendezvousLimits.Default, new ManualClock());
 
         var before = server.Snapshot();
         Assert.Equal(0, before.KnownPeers);
