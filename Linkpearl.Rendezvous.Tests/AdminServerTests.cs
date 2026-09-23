@@ -341,6 +341,120 @@ public sealed class AdminServerTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Un_monde_se_donne_par_son_nom_ou_par_son_numero()
+    {
+        // La page envoie le nom choisi dans la liste ; la ligne de commande,
+        // ou un monde trop récent pour la table, envoie le numéro.
+        var byName = await SendAsync(
+            HttpMethod.Post, "/api/bans", body: """{"name":"Nom Fictif","world":"Ragnarok","reason":"x"}""");
+
+        Assert.Equal(HttpStatusCode.OK, byName.StatusCode);
+        Assert.True(_bans.Current().Contains("Nom Fictif", 97));
+
+        var byNumber = await SendAsync(
+            HttpMethod.Post, "/api/bans", body: """{"name":"Autre Nom","world":"9999","reason":"x"}""");
+
+        Assert.Equal(HttpStatusCode.OK, byNumber.StatusCode);
+        Assert.True(_bans.Current().Contains("Autre Nom", 9999));
+
+        Assert.Equal(HttpStatusCode.BadRequest, (await SendAsync(
+            HttpMethod.Post, "/api/bans", body: """{"name":"Nom Fictif","world":"Nulle Part","reason":"x"}""")).StatusCode);
+    }
+
+    [Fact]
+    public async Task La_table_des_mondes_se_lit_groupee_par_centre()
+    {
+        var response = await SendAsync(HttpMethod.Get, "/api/worlds");
+        var worlds = JsonNode.Parse(await response.Content.ReadAsStringAsync())!["worlds"]!.AsArray();
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(Worlds.All.Count, worlds.Count);
+        Assert.Contains(worlds, world => world!["name"]!.GetValue<string>() == "Ragnarok" && world["dataCenter"]!.GetValue<string>() == "Chaos");
+    }
+
+    [Fact]
+    public async Task Verifier_dit_si_un_personnage_est_liste_sans_rien_ecrire()
+    {
+        _bans.Add("Nom Fictif", 97, "contenu illegal");
+        var before = File.ReadAllText(Path.Combine(_dir, "bans.json"));
+
+        var listed = await SendAsync(HttpMethod.Post, "/api/bans/verify", body: """{"name":"nom fictif","world":"Ragnarok"}""");
+        var listedBody = JsonNode.Parse(await listed.Content.ReadAsStringAsync())!;
+
+        Assert.Equal(HttpStatusCode.OK, listed.StatusCode);
+        Assert.True(listedBody["listed"]!.GetValue<bool>());
+        Assert.Equal(97, listedBody["world"]!.GetValue<int>());
+
+        var other = await SendAsync(HttpMethod.Post, "/api/bans/verify", body: """{"name":"Nom Fictif","world":"Odin"}""");
+
+        Assert.False(JsonNode.Parse(await other.Content.ReadAsStringAsync())!["listed"]!.GetValue<bool>());
+        Assert.Equal(before, File.ReadAllText(Path.Combine(_dir, "bans.json")));
+
+        Assert.Equal(HttpStatusCode.BadRequest,
+            (await SendAsync(HttpMethod.Post, "/api/bans/verify", body: """{"name":"","world":"Odin"}""")).StatusCode);
+    }
+
+    [Fact]
+    public async Task Lexport_est_un_telechargement_qui_se_relit()
+    {
+        _bans.Add("Nom Fictif", 97, "contenu illegal");
+
+        var response = await SendAsync(HttpMethod.Get, "/api/bans/export");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("attachment", response.Content.Headers.ContentDisposition!.DispositionType);
+        Assert.Contains("bans.json", response.Content.Headers.ContentDisposition.FileName);
+        Assert.True(BanList.TryParse(await response.Content.ReadAsStringAsync(), out var list, out var why), why);
+        Assert.True(list!.Contains("Nom Fictif", 97));
+    }
+
+    [Fact]
+    public async Task Lexport_exige_le_jeton()
+        => Assert.Equal(HttpStatusCode.Unauthorized, (await _client.GetAsync($"{_root}/api/bans/export")).StatusCode);
+
+    [Fact]
+    public async Task Limport_fusionne_une_liste_sous_le_meme_sel()
+    {
+        _bans.Add("Nom Fictif", 97, "ici");
+
+        var otherPath = Path.Combine(_dir, "autre.json");
+        File.Copy(Path.Combine(_dir, "bans.json"), otherPath);
+        var theirs = new BanStore(otherPath);
+        theirs.Add("Autre Nom", 66, "ailleurs");
+
+        var response = await SendAsync(HttpMethod.Post, "/api/bans/import", body: theirs.Json());
+        var result = JsonNode.Parse(await response.Content.ReadAsStringAsync())!;
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(1, result["added"]!.GetValue<int>());
+        Assert.Equal(2, result["total"]!.GetValue<int>());
+        Assert.True(_bans.Current().Contains("Autre Nom", 66));
+        Assert.Empty(Directory.GetFiles(_dir, "*.tmp"));
+    }
+
+    [Fact]
+    public async Task Limport_dune_liste_sous_un_autre_sel_rend_409_et_ne_change_rien()
+    {
+        _bans.Add("Nom Fictif", 97, "ici");
+        var before = File.ReadAllText(Path.Combine(_dir, "bans.json"));
+
+        var foreign = new BanStore(Path.Combine(_dir, "etranger.json"));
+        foreign.Add("Autre Nom", 66, "ailleurs");
+
+        var response = await SendAsync(HttpMethod.Post, "/api/bans/import", body: foreign.Json());
+        var body = await response.Content.ReadAsStringAsync();
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.Contains("sel", body);
+        Assert.Equal(before, File.ReadAllText(Path.Combine(_dir, "bans.json")));
+    }
+
+    [Fact]
+    public async Task Limport_dune_liste_illisible_rend_400()
+        => Assert.Equal(HttpStatusCode.BadRequest,
+            (await SendAsync(HttpMethod.Post, "/api/bans/import", body: """{"version":99}""")).StatusCode);
+
+    [Fact]
     public async Task Un_bannissement_sans_nom_est_refuse()
     {
         var response = await SendAsync(

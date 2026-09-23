@@ -60,6 +60,70 @@ public sealed class BanStore(string path)
         }
     }
 
+    /// <summary>
+    /// Dérive l'empreinte d'un personnage et dit si elle est listée, sans rien garder.
+    /// </summary>
+    /// <remarks>
+    /// Pour qu'un opérateur réponde « est-il banni chez moi ? » sans risquer
+    /// d'ajouter par mégarde, et sans que le nom passe par le journal ni le
+    /// disque : ce qui entre ici en ressort en empreinte, rien d'autre.
+    /// </remarks>
+    public (string Hash, bool Listed) Check(string name, ushort world)
+    {
+        lock (_gate)
+        {
+            var list = LoadLocked();
+            var hash = BanList.Derive(name, world, list.Salt, list.Parameters);
+
+            return (Convert.ToHexStringLower(hash), list.Entries.Any(entry => CryptographicOperations.FixedTimeEquals(entry.Hash, hash)));
+        }
+    }
+
+    /// <summary>
+    /// Fusionne une liste publiée par un autre service dans celle-ci.
+    /// </summary>
+    /// <remarks>
+    /// Seulement sous le même sel et le même coût de dérivation : deux listes
+    /// sous des sels différents portent des empreintes qui ne se comparent
+    /// pas, et les mêler ferait une liste où la moitié des entrées ne bannit
+    /// personne. Les entrées déjà présentes gardent leur motif et leur date
+    /// d'ici ; les nouvelles arrivent avec les leurs. Le fichier est réécrit
+    /// d'un bloc, ou pas du tout.
+    /// </remarks>
+    public ImportOutcome Import(string json)
+    {
+        if (BanList.TryParse(json, out var imported, out var why) is false || imported is null)
+            return ImportOutcome.Unreadable(why ?? "liste illisible");
+
+        lock (_gate)
+        {
+            var list = LoadLocked();
+
+            if (CryptographicOperations.FixedTimeEquals(list.Salt, imported.Salt) is false || list.Parameters != imported.Parameters)
+                return ImportOutcome.Foreign();
+
+            var entries = list.Entries.ToList();
+            var added = 0;
+
+            foreach (var entry in imported.Entries)
+            {
+                if (entries.Any(known => CryptographicOperations.FixedTimeEquals(known.Hash, entry.Hash)))
+                    continue;
+
+                entries.Add(new BanEntry(entry.Hash, Sanitize(entry.Reason), entry.Since));
+                added++;
+            }
+
+            if (entries.Count > BanList.MaxEntries)
+                return ImportOutcome.Unreadable($"la fusion dépasserait le plafond de {BanList.MaxEntries} entrées");
+
+            if (added > 0)
+                SaveLocked(new BanList(list.Salt, list.Parameters, entries));
+
+            return ImportOutcome.Merged(added, entries.Count);
+        }
+    }
+
     /// <summary>Retire une entrée par son empreinte.</summary>
     public bool Remove(string hashHex)
     {
@@ -139,4 +203,21 @@ public sealed class BanStore(string path)
         _list = list;
         _stamp = File.GetLastWriteTimeUtc(path);
     }
+}
+
+/// <summary>Ce qu'un import a fait, ou pourquoi il n'a rien fait.</summary>
+/// <remarks>
+/// Un sel étranger n'est pas une liste illisible : la première se refuse
+/// avec un conflit que l'opérateur comprend (« pas la même liste »), la
+/// seconde avec une erreur de format. Les deux ne se corrigent pas pareil.
+/// </remarks>
+public sealed record ImportOutcome(int Added, int Total, bool ForeignSalt, string? Rejection)
+{
+    public bool Ok => Rejection is null && ForeignSalt is false;
+
+    public static ImportOutcome Merged(int added, int total) => new(added, total, false, null);
+
+    public static ImportOutcome Foreign() => new(0, 0, true, null);
+
+    public static ImportOutcome Unreadable(string why) => new(0, 0, false, why);
 }

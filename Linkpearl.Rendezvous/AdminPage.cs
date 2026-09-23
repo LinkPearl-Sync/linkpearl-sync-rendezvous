@@ -124,6 +124,21 @@ public static class AdminPage
             border-radius: 6px; padding: .4rem .65rem; font: inherit; font-size: .9rem; min-width: 0;
           }
           input::placeholder { color: #6f7583; }
+          select {
+            background: var(--creux); color: var(--texte); border: 1px solid var(--bord);
+            border-radius: 6px; padding: .4rem .65rem; font: inherit; font-size: .9rem; min-width: 0; max-width: 14rem;
+          }
+          select:focus-visible { outline: 2px solid var(--nacre); outline-offset: 1px; }
+          .bouton {
+            display: inline-block; background: var(--creux); color: var(--texte); border: 1px solid var(--bord);
+            border-radius: 6px; padding: .32rem .75rem; cursor: pointer; font-size: .85rem; text-decoration: none;
+            transition: border-color .12s, color .12s;
+          }
+          .bouton:hover { border-color: var(--nacre); color: var(--nacre); }
+          .bouton:focus-visible, .bouton:has(input:focus-visible) { outline: 2px solid var(--nacre); outline-offset: 1px; }
+          .outils { display: flex; flex-wrap: wrap; gap: .6rem; align-items: center; justify-content: space-between; }
+          .outils .filtre { display: flex; align-items: center; gap: .5rem; font-size: .8rem; color: var(--doux); }
+          .actions-liste { display: flex; gap: .5rem; flex-wrap: wrap; }
           form { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
           form label { display: flex; flex-direction: column; gap: .25rem; font-size: .72rem; color: var(--doux); }
           .vide { color: var(--doux); font-size: .88rem; font-style: italic; }
@@ -257,6 +272,13 @@ public static class AdminPage
                 liste ne permet pas de le relire.
               </span>
             </div>
+            <div class="outils">
+              <label class="filtre">Filtrer <input id="filtre" type="search" placeholder="motif ou empreinte" size="24" oninput="afficherBans()"></label>
+              <span class="actions-liste">
+                <a class="bouton" href="/api/bans/export" download="bans.json">Exporter bans.json</a>
+                <label class="bouton">Importer un bans.json<input type="file" accept=".json,application/json" hidden onchange="importer(this)"></label>
+              </span>
+            </div>
             <div style="padding-bottom:.4rem">
               <table>
                 <colgroup><col style="width:28%"><col style="width:34%"><col style="width:20%"><col style="width:18%"></colgroup>
@@ -267,10 +289,22 @@ public static class AdminPage
             <div>
               <form onsubmit="bannir(event)">
                 <label>Personnage <input id="nom" placeholder="Nom Prénom" size="20" required></label>
-                <label>Monde <input id="monde" placeholder="identifiant numérique" size="16" inputmode="numeric" required></label>
+                <label>Monde
+                  <select id="monde" required onchange="$('mondeNumero').hidden = this.value !== 'autre'"></select>
+                </label>
+                <label id="mondeNumero" hidden>Identifiant
+                  <input id="mondeId" type="number" min="1" max="65535" placeholder="numéro du monde" size="10">
+                </label>
                 <label>Motif <input id="motif" placeholder="contenu illegal" size="24" maxlength="120"></label>
-                <button type="submit" class="primaire" style="align-self:flex-end">Ajouter</button>
+                <span class="actions-liste" style="align-self:flex-end">
+                  <button type="button" onclick="verifier()">Vérifier</button>
+                  <button type="submit" class="primaire">Ajouter</button>
+                </span>
               </form>
+              <p class="doux" style="margin:.6rem 0 0">
+                « Vérifier » dérive l'empreinte et dit si elle est listée, sans rien écrire.
+                L'import fusionne par empreinte une liste exportée par un service qui partage le même sel.
+              </p>
             </div>
           </div>
         </main>
@@ -296,7 +330,8 @@ public static class AdminPage
           const r = await fetch(chemin, {
             method: methode,
             headers: { "Content-Type": "application/json" },
-            body: corps ? JSON.stringify(corps) : undefined
+            // Un texte part tel quel : c'est un bans.json entier, déjà du JSON.
+            body: corps === undefined ? undefined : (typeof corps === "string" ? corps : JSON.stringify(corps))
           });
           if (r.status === 401) { perdu("jeton refusé, rechargez la page"); return null; }
           return r;
@@ -527,7 +562,16 @@ public static class AdminPage
             bouton("approuver", false, () => agir("/api/peers", "POST", { address: p.address }, p.address + " ajouté à l'annuaire"))
           ])), "aucune candidature. Un service qui s'annonce avec --announce-to apparaît ici.");
 
-          remplir($("bannis"), s.bans.map(b => {
+          bansCourants = s.bans;
+          afficherBans();
+        }
+
+        let bansCourants = [];
+
+        function afficherBans() {
+          const filtre = $("filtre").value.trim().toLowerCase();
+          const visibles = bansCourants.filter(b => !filtre || b.reason.toLowerCase().includes(filtre) || b.hash.startsWith(filtre));
+          remplir($("bannis"), visibles.map(b => {
             const c = document.createElement("code");
             c.textContent = b.hash.slice(0, 16) + "...";
             c.title = b.hash;
@@ -536,22 +580,86 @@ public static class AdminPage
                 if (confirm("Retirer cette entrée ? Le nom n'est pas conservé, donc elle ne se remet pas sans le ressaisir."))
                   return agir("/api/bans", "DELETE", { hash: b.hash }, "entrée retirée");
               })]);
-          }), "liste vide. Personne n'est banni par ce service.");
+          }), bansCourants.length === 0
+            ? "liste vide. Personne n'est banni par ce service."
+            : "aucune entrée ne correspond au filtre.");
+        }
+
+        // La table des mondes vient du service, qui la tient à jour à la main :
+        // la page n'en connaît aucun par elle-même.
+        async function chargerMondes() {
+          const r = await appel("/api/worlds", "GET");
+          if (!r || !r.ok) return;
+          const select = $("monde");
+          const groupes = new Map();
+          for (const m of (await r.json()).worlds) {
+            const cle = m.dataCenter + " (" + m.region + ")";
+            if (!groupes.has(cle)) groupes.set(cle, []);
+            groupes.get(cle).push(m);
+          }
+          const invite = new Option("choisir un monde", "", true, true);
+          invite.disabled = true;
+          select.replaceChildren(invite);
+          for (const [cle, mondes] of groupes) {
+            const g = document.createElement("optgroup");
+            g.label = cle;
+            for (const m of mondes) g.appendChild(new Option(m.name, m.name));
+            select.appendChild(g);
+          }
+          const autre = document.createElement("optgroup");
+          autre.label = "Autre";
+          autre.appendChild(new Option("par son identifiant numérique", "autre"));
+          select.appendChild(autre);
+        }
+
+        function personnage() {
+          const nom = $("nom").value.trim();
+          const choix = $("monde").value;
+          const monde = choix === "autre" ? $("mondeId").value.trim() : choix;
+          if (!nom || !monde) { toast("nom et monde requis", true); return null; }
+          return { name: nom, world: monde };
+        }
+
+        async function verifier() {
+          const qui = personnage();
+          if (!qui) return;
+          const r = await appel("/api/bans/verify", "POST", qui);
+          if (!r) return;
+          const reponse = await r.json().catch(() => ({}));
+          if (!r.ok) { toast(reponse.error || "refusé (" + r.status + ")", true); return; }
+          toast(reponse.listed
+            ? qui.name + " sur " + qui.world + " est dans la liste (" + reponse.hash.slice(0, 16) + "...)"
+            : qui.name + " sur " + qui.world + " n'est pas dans la liste", !reponse.listed);
         }
 
         async function bannir(e) {
           e.preventDefault();
-          const nom = $("nom").value.trim();
-          const monde = parseInt($("monde").value, 10);
-          if (!confirm("Bannir " + nom + " sur le monde " + monde + " ?\nCette liste relève de la réputation, et le nom ne sera pas conservé.")) return;
+          const qui = personnage();
+          if (!qui) return;
+          if (!confirm("Bannir " + qui.name + " sur " + qui.world + " ?\nCette liste relève de la réputation, et le nom ne sera pas conservé.")) return;
           const ajoute = await agir("/api/bans", "POST",
-            { name: nom, world: monde, reason: $("motif").value }, nom + " ajouté à la liste");
+            { ...qui, reason: $("motif").value }, qui.name + " ajouté à la liste");
           if (ajoute) { $("nom").value = ""; $("motif").value = ""; }
+        }
+
+        async function importer(champ) {
+          const fichier = champ.files[0];
+          champ.value = "";
+          if (!fichier) return;
+          const texte = await fichier.text();
+          if (!confirm("Fusionner " + fichier.name + " dans la liste ? Les entrées déjà présentes gardent leur motif.")) return;
+          const r = await appel("/api/bans/import", "POST", texte);
+          if (!r) return;
+          const reponse = await r.json().catch(() => ({}));
+          if (!r.ok) { toast(reponse.error || "refusé (" + r.status + ")", true); return; }
+          toast(reponse.added + (reponse.added > 1 ? " entrées ajoutées, " : " entrée ajoutée, ") + reponse.total + " au total");
+          await rafraichir();
         }
 
         // Une page laissée ouverte dans un onglet de fond n'a rien à interroger.
         document.addEventListener("visibilitychange", () => { if (!document.hidden) rafraichir(); });
         setInterval(() => { if (!document.hidden) rafraichir(); }, 5000);
+        chargerMondes();
         rafraichir();
         </script>
         </body>

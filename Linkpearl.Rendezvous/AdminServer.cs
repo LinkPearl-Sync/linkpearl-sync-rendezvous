@@ -41,6 +41,19 @@ public sealed class AdminServer(
 
     private readonly DateTimeOffset _started = clock.UtcNow;
 
+    /// <summary>Où la console écrit ce qu'elle change. Jamais d'adresse ni de nom.</summary>
+    public TextWriter Log { get; init; } = Console.Out;
+
+    /// <summary>
+    /// Au-delà, un import est refusé sans être lu.
+    /// </summary>
+    /// <remarks>
+    /// Une liste pleine, à 4096 entrées de cent vingt caractères de motif,
+    /// fait moins de huit cents kilooctets : un mégaoctet laisse de la marge
+    /// sans laisser un jeton volé faire allouer ce qu'il veut.
+    /// </remarks>
+    private const long MaxImportBytes = 1024 * 1024;
+
     public async Task RunAsync(CancellationToken ct)
     {
         using var listener = new HttpListener();
@@ -205,6 +218,78 @@ public sealed class AdminServer(
                 Respond(context, 200, "application/json", bans.Json());
                 return;
 
+            case ("/api/bans/export", "GET"):
+                // Le même document que /api/bans, présenté en téléchargement :
+                // c'est ce qu'un opérateur envoie à un autre pour fusion.
+                context.Response.AddHeader("Content-Disposition", "attachment; filename=\"bans.json\"");
+                Respond(context, 200, "application/json", bans.Json());
+                return;
+
+            case ("/api/worlds", "GET"):
+                Respond(context, 200, "application/json", WorldsJson());
+                return;
+
+            case ("/api/bans/verify", "POST"):
+            {
+                // Le nom ne passe ni par le journal ni par le disque : il entre
+                // ici et en ressort en empreinte.
+                var body = await BodyAsync(context).ConfigureAwait(false);
+                var name = body?["name"]?.GetValue<string>() ?? "";
+
+                if (name.Trim().Length is 0 || Worlds.TryResolve(WorldText(body), out var world) is false)
+                {
+                    Respond(context, 400, "application/json", """{"error":"nom ou monde manquant"}""");
+                    return;
+                }
+
+                var (hash, listed) = bans.Check(name, world);
+
+                Respond(context, 200, "application/json", new JsonObject
+                {
+                    ["listed"] = listed,
+                    ["hash"] = hash,
+                    ["world"] = world,
+                }.ToJsonString());
+                return;
+            }
+
+            case ("/api/bans/import", "POST"):
+            {
+                // Le corps est un bans.json entier, borné : une liste publiée
+                // ne dépasse pas quelques centaines de kilooctets, et lire
+                // sans borne ce qu'un jeton volé enverrait serait un trou.
+                if (context.Request.ContentLength64 > MaxImportBytes)
+                {
+                    Respond(context, 413, "application/json", """{"error":"liste trop volumineuse"}""");
+                    return;
+                }
+
+                var text = await TextAsync(context).ConfigureAwait(false);
+                var outcome = bans.Import(text);
+
+                if (outcome.ForeignSalt)
+                {
+                    Respond(context, 409, "application/json",
+                        """{"error":"cette liste n'est pas sous le sel de ce service : ses empreintes ne se comparent pas aux nôtres, et la fusionner ne bannirait personne"}""");
+                    return;
+                }
+
+                if (outcome.Rejection is not null)
+                {
+                    Respond(context, 400, "application/json", new JsonObject { ["error"] = outcome.Rejection }.ToJsonString());
+                    return;
+                }
+
+                Log.WriteLine($"Liste de bannissement importée : {outcome.Added} entrée(s) ajoutée(s), {outcome.Total} au total.");
+
+                Respond(context, 200, "application/json", new JsonObject
+                {
+                    ["added"] = outcome.Added,
+                    ["total"] = outcome.Total,
+                }.ToJsonString());
+                return;
+            }
+
             case ("/api/peers", "POST"):
             {
                 var body = await BodyAsync(context).ConfigureAwait(false);
@@ -234,16 +319,18 @@ public sealed class AdminServer(
             {
                 var body = await BodyAsync(context).ConfigureAwait(false);
                 var name = body?["name"]?.GetValue<string>() ?? "";
-                var world = body?["world"]?.GetValue<int>() ?? 0;
                 var reason = body?["reason"]?.GetValue<string>() ?? "";
 
-                if (name.Trim().Length is 0 || world is <= 0 or > ushort.MaxValue)
+                // Le monde arrive par son nom depuis la page, ou par son
+                // numéro depuis la ligne de commande ou pour un monde que la
+                // table ne connaît pas encore.
+                if (name.Trim().Length is 0 || Worlds.TryResolve(WorldText(body), out var world) is false)
                 {
                     Respond(context, 400, "application/json", """{"error":"nom ou monde manquant"}""");
                     return;
                 }
 
-                var hash = bans.Add(name, (ushort)world, reason);
+                var hash = bans.Add(name, world, reason);
 
                 Respond(context, hash is null ? 409 : 200, "application/json",
                     hash is null
@@ -436,8 +523,7 @@ public sealed class AdminServer(
 
     private static async Task<JsonObject?> BodyAsync(HttpListenerContext context)
     {
-        using var reader = new StreamReader(context.Request.InputStream, Encoding.UTF8);
-        var text = await reader.ReadToEndAsync().ConfigureAwait(false);
+        var text = await TextAsync(context).ConfigureAwait(false);
 
         try
         {
@@ -447,6 +533,34 @@ public sealed class AdminServer(
         {
             return null;
         }
+    }
+
+    private static async Task<string> TextAsync(HttpListenerContext context)
+    {
+        using var reader = new StreamReader(context.Request.InputStream, Encoding.UTF8);
+        return await reader.ReadToEndAsync().ConfigureAwait(false);
+    }
+
+    /// <summary>Le champ « world » tel qu'il est venu : un nombre ou une chaîne, les deux se lisent.</summary>
+    private static string? WorldText(JsonObject? body)
+        => body?["world"] is JsonValue value ? value.ToString() : null;
+
+    private static string WorldsJson()
+    {
+        var worlds = new JsonArray();
+
+        foreach (var world in Worlds.All)
+        {
+            worlds.Add(new JsonObject
+            {
+                ["id"] = world.Id,
+                ["name"] = world.Name,
+                ["dataCenter"] = world.DataCenter,
+                ["region"] = world.Region,
+            });
+        }
+
+        return new JsonObject { ["worlds"] = worlds }.ToJsonString();
     }
 
     private static void Respond(HttpListenerContext context, int status, string type, string body)

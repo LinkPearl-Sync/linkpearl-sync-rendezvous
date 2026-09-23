@@ -120,3 +120,84 @@ public sealed class BanStoreTests : IDisposable
         Assert.Equal("ceci n'est pas du JSON", File.ReadAllText(Path_));
     }
 }
+
+/// <summary>Vérifier sans rien garder, et fusionner sans mélanger deux sels.</summary>
+public sealed class BanStoreImportTests : IDisposable
+{
+    private readonly string _dir = Path.Combine(Path.GetTempPath(), $"lprdv-bans-{Guid.NewGuid():N}");
+
+    private string Path_ => System.IO.Path.Combine(_dir, "bans.json");
+
+    public BanStoreImportTests() => Directory.CreateDirectory(_dir);
+
+    public void Dispose() => Directory.Delete(_dir, recursive: true);
+
+    [Fact]
+    public void Verifier_dit_si_le_personnage_est_liste_sans_rien_ecrire()
+    {
+        var store = new BanStore(Path_);
+        var added = store.Add("Nom Fictif", 42, "contenu illegal");
+        var before = File.ReadAllText(Path_);
+
+        var (hash, listed) = store.Check("nom fictif", 42);
+        var (_, other) = store.Check("Nom Fictif", 43);
+
+        Assert.True(listed);
+        Assert.Equal(added, hash);
+        Assert.False(other);
+        Assert.Equal(before, File.ReadAllText(Path_));
+    }
+
+    [Fact]
+    public void Une_liste_sous_le_meme_sel_se_fusionne_par_empreinte()
+    {
+        var mine = new BanStore(Path_);
+        mine.Add("Nom Fictif", 42, "ici");
+
+        // Une seconde instance sur une copie du fichier : même sel, puis une
+        // entrée en plus et un motif différent sur l'entrée commune.
+        var otherPath = System.IO.Path.Combine(_dir, "autre.json");
+        File.Copy(Path_, otherPath);
+        var theirs = new BanStore(otherPath);
+        theirs.Add("Autre Nom", 43, "ailleurs");
+
+        var outcome = mine.Import(theirs.Json());
+
+        Assert.True(outcome.Ok);
+        Assert.Equal(1, outcome.Added);
+        Assert.Equal(2, outcome.Total);
+        Assert.True(mine.Current().Contains("Autre Nom", 43));
+        Assert.Equal("ici", mine.Current().Entries[0].Reason);
+        Assert.Empty(Directory.GetFiles(_dir, "*.tmp"));
+
+        // Réimporter la même liste n'ajoute rien.
+        Assert.Equal(0, mine.Import(theirs.Json()).Added);
+    }
+
+    [Fact]
+    public void Une_liste_sous_un_autre_sel_est_refusee_sans_rien_changer()
+    {
+        var mine = new BanStore(Path_);
+        mine.Add("Nom Fictif", 42, "ici");
+        var before = File.ReadAllText(Path_);
+
+        var foreign = new BanStore(System.IO.Path.Combine(_dir, "etranger.json"));
+        foreign.Add("Autre Nom", 43, "ailleurs");
+
+        var outcome = mine.Import(foreign.Json());
+
+        Assert.False(outcome.Ok);
+        Assert.True(outcome.ForeignSalt);
+        Assert.Equal(before, File.ReadAllText(Path_));
+    }
+
+    [Fact]
+    public void Une_liste_illisible_est_refusee_avec_son_motif()
+    {
+        var outcome = new BanStore(Path_).Import("{\"version\": 99}");
+
+        Assert.False(outcome.Ok);
+        Assert.False(outcome.ForeignSalt);
+        Assert.NotNull(outcome.Rejection);
+    }
+}
