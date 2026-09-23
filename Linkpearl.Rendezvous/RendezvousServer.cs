@@ -70,14 +70,27 @@ public sealed class RendezvousServer(int requestedPort, PeerDirectory directory,
     /// de retoucher chaque chemin de code. Aucune trame ne les expose.
     /// </remarks>
     public sealed record Counters(
-        int OpenMailboxes, int PendingAnnouncements, long Matches, long RelayedBytes,
-        int Connections, long RefusedConnections,
+        int OpenMailboxes, int PendingAnnouncements, int RelayWaiting, int PendingInvitations,
+        long Matches, long RelayedBytes,
+        int Connections, long RefusedConnections, long RateRefusals, int TrackedAddresses,
         int KnownPeers, int PendingSubmissions);
 
-    public Counters Snapshot() => new(
-        _mailboxes.Count, _waiting.Count, Matched, PeerSession.TotalRelayedBytes,
-        Volatile.Read(ref _connections), Interlocked.Read(ref _refusedConnections),
-        directory.Known().Count, directory.Pending().Count);
+    public Counters Snapshot()
+    {
+        int invitations;
+
+        lock (_invitationGate)
+            invitations = _invitations.Count;
+
+        return new(
+            _mailboxes.Count, _waiting.Count, _relayWaiting.Count, invitations,
+            Matched, PeerSession.TotalRelayedBytes,
+            Volatile.Read(ref _connections), Interlocked.Read(ref _refusedConnections),
+            Interlocked.Read(ref _rateRefusals), _rate.Count,
+            directory.Known().Count, directory.Pending().Count);
+    }
+
+    private long _rateRefusals;
 
     private int _connections;
     private long _refusedConnections;
@@ -93,7 +106,8 @@ public sealed class RendezvousServer(int requestedPort, PeerDirectory directory,
     }
 
     private readonly ConcurrentDictionary<string, Waiting> _waiting = new(StringComparer.Ordinal);
-    private readonly ConcurrentDictionary<string, PeerSession> _relayWaiting = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, (PeerSession Session, DateTimeOffset Since)> _relayWaiting =
+        new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, (int Count, DateTimeOffset Window)> _rate = new(StringComparer.Ordinal);
 
     /// <summary>
@@ -106,10 +120,19 @@ public sealed class RendezvousServer(int requestedPort, PeerDirectory directory,
     /// mots du handshake ; une fois la clé épinglée, le serveur n'a plus aucun
     /// pouvoir sur cette paire.
     /// </remarks>
-    private readonly ConcurrentDictionary<string, (byte[] Payload, DateTimeOffset Expiry)> _invitations =
-        new(StringComparer.Ordinal);
+    private sealed record Invitation(byte[] Payload, DateTimeOffset Expiry, string Bucket);
+
+    // Un verrou et non un dictionnaire concurrent : le plafond par adresse
+    // demande un compte tenu à jour à chaque dépôt et retrait, et deux
+    // structures concurrentes ne se mettent pas d'accord sans lui. Les
+    // invitations sont rares, le verrou ne se voit pas.
+    private readonly Lock _invitationGate = new();
+    private readonly Dictionary<string, Invitation> _invitations = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, int> _invitationsPerBucket = new(StringComparer.Ordinal);
 
     private static readonly TimeSpan InvitationLifetime = TimeSpan.FromHours(24);
+
+    private static readonly TimeSpan RateWindow = TimeSpan.FromMinutes(1);
 
     /// <summary>
     /// Les boîtes ouvertes, et la session qui les tient.
@@ -334,7 +357,7 @@ public sealed class RendezvousServer(int requestedPort, PeerDirectory directory,
                     RendezvousKind.RelayOpen => await HandleRelayAsync(session, frame, ct).ConfigureAwait(false),
                     RendezvousKind.TicketRegister => await HandleRegisterTicketAsync(session, frame, ct).ConfigureAwait(false),
                     RendezvousKind.TicketRedeem => await HandleRedeemTicketAsync(session, frame, ct).ConfigureAwait(false),
-                    RendezvousKind.MailboxOpen => HandleMailboxOpen(session, frame),
+                    RendezvousKind.MailboxOpen => await HandleMailboxOpenAsync(session, frame, ct).ConfigureAwait(false),
                     RendezvousKind.MailboxQuery => await HandleMailboxQueryAsync(session, frame, ct).ConfigureAwait(false),
                     RendezvousKind.MailboxDeposit => await HandleMailboxDepositAsync(session, frame, ct).ConfigureAwait(false),
                     RendezvousKind.DirectoryQuery => await HandleDirectoryQueryAsync(session, ct).ConfigureAwait(false),
@@ -397,14 +420,14 @@ public sealed class RendezvousServer(int requestedPort, PeerDirectory directory,
     private bool HandleDirectorySubmit(PeerSession session, byte[] frame)
     {
         if (RendezvousWire.TryReadDirectory(frame, out var submitted, out _) && submitted.Count is 1)
-            directory.Submit(session.Address, submitted[0]);
+            directory.Submit(session.Bucket, submitted[0]);
 
         return true;
     }
 
     private async Task<bool> HandleAnnounceAsync(PeerSession session, byte[] frame, CancellationToken ct)
     {
-        if (RateExceeded(session.Address))
+        if (RateExceeded(session.Bucket))
         {
             await session.SendAsync(RendezvousWire.Error("trop d'annonces"), ct).ConfigureAwait(false);
             return false;
@@ -416,10 +439,18 @@ public sealed class RendezvousServer(int requestedPort, PeerDirectory directory,
             return false;
         }
 
-        foreach (var ticket in announcement!.Tickets)
-        {
-            var key = Convert.ToHexStringLower(ticket);
+        var keys = announcement!.Tickets.Select(Convert.ToHexStringLower).Distinct(StringComparer.Ordinal).ToList();
 
+        // Réannoncer les mêmes jetons ne compte pas : le plugin le fait à chaque
+        // fenêtre. Seules les clés nouvelles peuvent faire dépasser le plafond.
+        if (session.KeyCount + keys.Count(key => session.HasKey(key) is false) > Limits.MaxWaitingKeysPerSession)
+        {
+            await session.SendAsync(RendezvousWire.Error("trop d'annonces en attente sur cette connexion"), ct).ConfigureAwait(false);
+            return false;
+        }
+
+        foreach (var key in keys)
+        {
             // Un pair déjà en attente sur ce jeton, et qui n'est pas nous : on
             // échange les blocs, sans jamais les lire.
             if (_waiting.TryRemove(key, out var partner) && ReferenceEquals(partner.Session, session) is false)
@@ -459,21 +490,29 @@ public sealed class RendezvousServer(int requestedPort, PeerDirectory directory,
         if (frame.Length != 1 + RendezvousTicket.SizeInBytes)
             return false;
 
+        // Comptée comme une annonce : une demande de relais gare une socket
+        // jusqu'à l'expiration, et c'est la trame la plus coûteuse à offrir.
+        if (RateExceeded(session.Bucket))
+        {
+            await session.SendAsync(RendezvousWire.Error("trop de demandes de relais"), ct).ConfigureAwait(false);
+            return false;
+        }
+
         var key = Convert.ToHexStringLower(frame.AsSpan(1));
 
-        if (_relayWaiting.TryRemove(key, out var partner) && ReferenceEquals(partner, session) is false)
+        if (_relayWaiting.TryRemove(key, out var partner) && ReferenceEquals(partner.Session, session) is false)
         {
             Relayed++;
-            Console.WriteLine($"[{key[..8]}] relais ouvert entre {partner.Address} et {session.Address}");
+            Console.WriteLine($"[{key[..8]}] relais ouvert entre {partner.Session.Address} et {session.Address}");
 
-            await partner.SendAsync(RendezvousWire.Simple(RendezvousKind.RelayReady), ct).ConfigureAwait(false);
+            await partner.Session.SendAsync(RendezvousWire.Simple(RendezvousKind.RelayReady), ct).ConfigureAwait(false);
             await session.SendAsync(RendezvousWire.Simple(RendezvousKind.RelayReady), ct).ConfigureAwait(false);
 
-            await PeerSession.PipeAsync(partner, session, ct).ConfigureAwait(false);
+            await PeerSession.PipeAsync(partner.Session, session, ct).ConfigureAwait(false);
             return true;
         }
 
-        _relayWaiting[key] = session;
+        _relayWaiting[key] = (session, clock.UtcNow);
         session.Remember(key);
         session.Park();
         return true;
@@ -486,22 +525,76 @@ public sealed class RendezvousServer(int requestedPort, PeerDirectory directory,
         if (payloadLength is <= 0 or > RendezvousWire.MaxTicketPayloadLength)
             return false;
 
-        if (RateExceeded(session.Address))
+        if (RateExceeded(session.Bucket))
         {
             await session.SendAsync(RendezvousWire.Error("trop de dépôts"), ct).ConfigureAwait(false);
             return false;
         }
 
         var key = Convert.ToHexStringLower(frame.AsSpan(1, RendezvousWire.InvitationTicketSize));
-
-        _invitations[key] = (
+        var invitation = new Invitation(
             frame.AsSpan(1 + RendezvousWire.InvitationTicketSize).ToArray(),
-            clock.UtcNow + InvitationLifetime);
+            clock.UtcNow + InvitationLifetime,
+            session.Bucket);
+
+        if (TryStoreInvitation(key, invitation) is false)
+        {
+            // Refusée mais sans couper : un foyer qui a beaucoup invité n'a
+            // commis aucune faute de protocole, et le plugin sait lire ce refus.
+            await session.SendAsync(RendezvousWire.Error("trop d'invitations en attente"), ct).ConfigureAwait(false);
+            return true;
+        }
 
         Console.WriteLine($"[{key}] invitation déposée par {session.Address}");
 
         await session.SendAsync(RendezvousWire.Simple(RendezvousKind.TicketAccepted), ct).ConfigureAwait(false);
         return true;
+    }
+
+    private bool TryStoreInvitation(string key, Invitation invitation)
+    {
+        var limits = Limits;
+
+        lock (_invitationGate)
+        {
+            // Redéposer le même ticket remplace l'ancien : il ne compte qu'une fois.
+            var replaced = _invitations.GetValueOrDefault(key);
+            var total = _invitations.Count - (replaced is null ? 0 : 1);
+            var perBucket = _invitationsPerBucket.GetValueOrDefault(invitation.Bucket)
+                            - (replaced?.Bucket == invitation.Bucket ? 1 : 0);
+
+            if (total >= limits.MaxInvitations || perBucket >= limits.MaxInvitationsPerAddress)
+                return false;
+
+            if (replaced is not null)
+                ReleaseInvitationLocked(replaced);
+
+            _invitations[key] = invitation;
+            _invitationsPerBucket[invitation.Bucket] = _invitationsPerBucket.GetValueOrDefault(invitation.Bucket) + 1;
+            return true;
+        }
+    }
+
+    private Invitation? TakeInvitation(string key)
+    {
+        lock (_invitationGate)
+        {
+            if (_invitations.Remove(key, out var invitation) is false)
+                return null;
+
+            ReleaseInvitationLocked(invitation);
+            return invitation;
+        }
+    }
+
+    private void ReleaseInvitationLocked(Invitation invitation)
+    {
+        var remaining = _invitationsPerBucket.GetValueOrDefault(invitation.Bucket) - 1;
+
+        if (remaining <= 0)
+            _invitationsPerBucket.Remove(invitation.Bucket);
+        else
+            _invitationsPerBucket[invitation.Bucket] = remaining;
     }
 
     private async Task<bool> HandleRedeemTicketAsync(PeerSession session, byte[] frame, CancellationToken ct)
@@ -511,7 +604,7 @@ public sealed class RendezvousServer(int requestedPort, PeerDirectory directory,
 
         // Le plafond d'essais est ce qui rend les quarante-huit bits du ticket
         // suffisants : sans lui, on pourrait les parcourir.
-        if (RateExceeded(session.Address))
+        if (RateExceeded(session.Bucket))
         {
             await session.SendAsync(RendezvousWire.Error("trop d'essais"), ct).ConfigureAwait(false);
             return false;
@@ -520,7 +613,9 @@ public sealed class RendezvousServer(int requestedPort, PeerDirectory directory,
         var key = Convert.ToHexStringLower(frame.AsSpan(1, RendezvousWire.InvitationTicketSize));
 
         // Usage unique : retiré à la première lecture, y compris s'il a expiré.
-        if (_invitations.TryRemove(key, out var invitation) is false || invitation.Expiry < clock.UtcNow)
+        var invitation = TakeInvitation(key);
+
+        if (invitation is null || invitation.Expiry < clock.UtcNow)
         {
             await session.SendAsync(RendezvousWire.Error("invitation inconnue, déjà utilisée ou expirée"), ct)
                          .ConfigureAwait(false);
@@ -534,14 +629,27 @@ public sealed class RendezvousServer(int requestedPort, PeerDirectory directory,
     }
 
     /// <summary>Ouvre les boîtes d'un client, qui recevra les dépôts sur cette connexion.</summary>
-    private bool HandleMailboxOpen(PeerSession session, byte[] frame)
+    private async Task<bool> HandleMailboxOpenAsync(PeerSession session, byte[] frame, CancellationToken ct)
     {
         if (RendezvousWire.TryReadAddresses(frame, out var addresses, out _) is false)
             return false;
 
-        foreach (var address in addresses)
+        if (RateExceeded(session.Bucket))
         {
-            var key = Convert.ToHexStringLower(address);
+            await session.SendAsync(RendezvousWire.Error("trop d'ouvertures"), ct).ConfigureAwait(false);
+            return false;
+        }
+
+        var keys = addresses.Select(Convert.ToHexStringLower).Distinct(StringComparer.Ordinal).ToList();
+
+        if (session.MailboxCount + keys.Count(key => session.HasMailbox(key) is false) > Limits.MaxMailboxesPerSession)
+        {
+            await session.SendAsync(RendezvousWire.Error("trop de boîtes sur cette connexion"), ct).ConfigureAwait(false);
+            return false;
+        }
+
+        foreach (var key in keys)
+        {
             _mailboxes[key] = session;
             session.RememberMailbox(key);
         }
@@ -558,7 +666,7 @@ public sealed class RendezvousServer(int requestedPort, PeerDirectory directory,
             return false;
         }
 
-        if (RateExceeded(session.Address))
+        if (RateExceeded(session.Bucket))
         {
             await session.SendAsync(RendezvousWire.Error("trop d'interrogations"), ct).ConfigureAwait(false);
             return false;
@@ -590,7 +698,7 @@ public sealed class RendezvousServer(int requestedPort, PeerDirectory directory,
         if (payloadLength is <= 0 or > RendezvousWire.MaxDepositLength)
             return false;
 
-        if (RateExceeded(session.Address))
+        if (RateExceeded(session.Bucket))
         {
             await session.SendAsync(RendezvousWire.Error("trop de dépôts"), ct).ConfigureAwait(false);
             return false;
@@ -613,17 +721,21 @@ public sealed class RendezvousServer(int requestedPort, PeerDirectory directory,
         return true;
     }
 
-    private bool RateExceeded(string address)
+    private bool RateExceeded(string bucket)
     {
         var now = clock.UtcNow;
         var entry = _rate.AddOrUpdate(
-            address,
+            bucket,
             _ => (1, now),
-            (_, existing) => now - existing.Window > TimeSpan.FromMinutes(1)
+            (_, existing) => now - existing.Window > RateWindow
                 ? (1, now)
                 : (existing.Count + 1, existing.Window));
 
-        return entry.Count > Limits.AnnouncementsPerMinute;
+        if (entry.Count <= Limits.AnnouncementsPerMinute)
+            return false;
+
+        Interlocked.Increment(ref _rateRefusals);
+        return true;
     }
 
     private void Forget(PeerSession session)
@@ -631,7 +743,9 @@ public sealed class RendezvousServer(int requestedPort, PeerDirectory directory,
         foreach (var key in session.Keys)
         {
             _waiting.TryRemove(new KeyValuePair<string, Waiting>(key, _waiting.GetValueOrDefault(key)!));
-            _relayWaiting.TryRemove(new KeyValuePair<string, PeerSession>(key, session));
+
+            if (_relayWaiting.TryGetValue(key, out var relay) && ReferenceEquals(relay.Session, session))
+                _relayWaiting.TryRemove(new KeyValuePair<string, (PeerSession, DateTimeOffset)>(key, relay));
         }
 
         // Une boîte n'existe que tant que sa connexion tient : une déconnexion
@@ -641,21 +755,34 @@ public sealed class RendezvousServer(int requestedPort, PeerDirectory directory,
     }
 
     /// <summary>
-    /// Oublie les attentes trop anciennes.
+    /// Oublie ce qui ne peut plus servir.
     /// </summary>
     /// <remarks>
     /// Une fenêtre de jeton dure dix minutes : au-delà, une attente ne peut plus
     /// aboutir, et la garder ferait du serveur un index de ce qu'il ne doit pas
-    /// retenir.
+    /// retenir. Toutes les dix secondes et non toutes les minutes : le relais
+    /// abandonné se compte en dizaines de secondes, et un balayage coûte une
+    /// lecture de quelques dictionnaires.
     /// </remarks>
     private async Task ExpireAsync(CancellationToken ct)
     {
         while (ct.IsCancellationRequested is false)
         {
-            await Task.Delay(TimeSpan.FromMinutes(1), ct).ConfigureAwait(false);
-            Sweep();
+            await Task.Delay(SweepInterval, ct).ConfigureAwait(false);
+
+            try
+            {
+                Sweep();
+            }
+            catch (Exception e)
+            {
+                // Une faute ici ne doit pas arrêter le balayage pour toujours.
+                Console.WriteLine($"Balayage en échec ({e.GetType().Name}) : {e.Message}");
+            }
         }
     }
+
+    private static readonly TimeSpan SweepInterval = TimeSpan.FromSeconds(10);
 
     /// <summary>Un passage du balayage, à l'heure de l'horloge injectée.</summary>
     /// <remarks>
@@ -665,19 +792,51 @@ public sealed class RendezvousServer(int requestedPort, PeerDirectory directory,
     public void Sweep()
     {
         var now = clock.UtcNow;
-        var deadline = now - RendezvousTicket.Window;
+        var limits = Limits;
 
         foreach (var (key, waiting) in _waiting)
         {
-            if (waiting.Since < deadline)
-                _waiting.TryRemove(key, out _);
+            if (waiting.Since < now - RendezvousTicket.Window
+                && _waiting.TryRemove(new KeyValuePair<string, Waiting>(key, waiting)))
+                waiting.Session.ForgetKey(key);
         }
 
-        foreach (var (key, invitation) in _invitations)
+        foreach (var (key, relay) in _relayWaiting)
         {
-            if (invitation.Expiry < now)
-                _invitations.TryRemove(key, out _);
+            if (relay.Since < now - limits.RelayWaitTimeout
+                && _relayWaiting.TryRemove(new KeyValuePair<string, (PeerSession, DateTimeOffset)>(key, relay)))
+            {
+                relay.Session.ForgetKey(key);
+                _ = AbandonRelayAsync(relay.Session);
+            }
         }
+
+        lock (_invitationGate)
+        {
+            foreach (var (key, invitation) in _invitations.ToList())
+            {
+                if (invitation.Expiry < now)
+                {
+                    _invitations.Remove(key);
+                    ReleaseInvitationLocked(invitation);
+                }
+            }
+        }
+
+        // Une fenêtre close ne pèse plus sur personne : l'entrée s'efface, sans
+        // quoi le limiteur garderait une trace de chaque adresse jamais vue.
+        foreach (var (bucket, entry) in _rate)
+        {
+            if (now - entry.Window > RateWindow)
+                _rate.TryRemove(new KeyValuePair<string, (int, DateTimeOffset)>(bucket, entry));
+        }
+    }
+
+    /// <summary>Prévient une session garée que son pair n'est pas venu, et la libère.</summary>
+    private static async Task AbandonRelayAsync(PeerSession session)
+    {
+        await session.TrySendAsync(RendezvousWire.Error("relais sans partenaire"), CancellationToken.None).ConfigureAwait(false);
+        session.ReleaseFromRelay();
     }
 
     private static IPEndPoint Normalize(IPEndPoint endpoint)

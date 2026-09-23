@@ -81,7 +81,8 @@ string ArgString(string name, string fallback)
 // L'annuaire vit dans deux fichiers que l'opérateur écrit et relit. Rien n'est
 // jamais ajouté à peers.txt par le service lui-même : une candidature attend
 // dans pending.txt qu'un humain la déplace.
-var directory = new PeerDirectory(ArgString("--peers", "peers.txt"), ArgString("--pending", "pending.txt"));
+var clock = new SystemClock();
+var directory = new PeerDirectory(ArgString("--peers", "peers.txt"), ArgString("--pending", "pending.txt"), clock);
 
 using var stopping = new CancellationTokenSource();
 Console.CancelKeyPress += (_, e) => { e.Cancel = true; stopping.Cancel(); };
@@ -103,7 +104,6 @@ foreach (var target in ArgAll("--announce-to"))
         stopping.Token);
 }
 
-var clock = new SystemClock();
 var limits = new RendezvousLimits { AnnouncementsPerMinute = rate };
 var service = new RendezvousServer(port, directory, limits, clock);
 var bans = new BanStore(ArgString("--bans", "bans.json"));
@@ -119,7 +119,7 @@ if (args.Contains("--no-admin") is false)
 {
     var token = AdminToken.LoadOrCreate(ArgString("--admin-token", "admin.token"));
     var admin = new AdminServer(
-        ArgString("--admin-allow", "local") is not "any", adminPort, port, token, service, directory, bans);
+        ArgString("--admin-allow", "local") is not "any", adminPort, port, token, service, directory, bans, clock);
 
     running.Add(admin.RunAsync(stopping.Token));
 }

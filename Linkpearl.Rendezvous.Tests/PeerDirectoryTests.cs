@@ -149,3 +149,31 @@ public sealed class DirectoryTests : IDisposable
         Assert.Equal(1, after.PendingSubmissions);
     }
 }
+
+/// <summary>Ce que l'annuaire retient des sources de candidatures.</summary>
+public sealed class SubmitterMemoryTests : IDisposable
+{
+    private readonly string _root = Path.Combine(Path.GetTempPath(), "lprdv-" + Guid.NewGuid().ToString("N"));
+
+    public SubmitterMemoryTests() => System.IO.Directory.CreateDirectory(_root);
+
+    public void Dispose() => System.IO.Directory.Delete(_root, recursive: true);
+
+    [Fact]
+    public void Les_sources_anciennes_sont_oubliees()
+    {
+        // Le frein d'une candidature par heure gardait chaque adresse pour
+        // toujours : un jour de candidatures venues de partout, et le
+        // dictionnaire ne désenfle plus.
+        var clock = new ManualClock();
+        var directory = new PeerDirectory(Path.Combine(_root, "peers.txt"), Path.Combine(_root, "pending.txt"), clock);
+
+        Assert.True(directory.Submit("198.51.100.7", new DirectoryEntry("rdv.a.ch", "A")));
+        Assert.Equal(1, directory.TrackedSubmitters);
+
+        clock.Advance(TimeSpan.FromHours(2));
+        Assert.True(directory.Submit("198.51.100.8", new DirectoryEntry("rdv.b.ch", "B")));
+
+        Assert.Equal(1, directory.TrackedSubmitters);
+    }
+}

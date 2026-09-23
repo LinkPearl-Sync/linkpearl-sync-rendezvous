@@ -1,9 +1,9 @@
-using System.Collections.Concurrent;
 using System.Net;
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Linkpearl.Core.Abstractions;
 using Linkpearl.Core.Transport.Rendezvous;
 
 namespace Linkpearl.Rendezvous;
@@ -30,21 +30,16 @@ namespace Linkpearl.Rendezvous;
 /// </remarks>
 public sealed class AdminServer(
     bool localOnly, int adminPort, int servicePort, string token,
-    RendezvousServer service, PeerDirectory directory, BanStore bans)
+    RendezvousServer service, PeerDirectory directory, BanStore bans, IClock clock)
 {
     /// <summary>La version, sans l'empreinte de commit que le SDK y accole.</summary>
     private static readonly string Version =
         (typeof(AdminServer).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
          ?? "inconnue").Split('+')[0];
 
-    private const int FailuresBeforeSlowing = 5;
+    private readonly FailureTracker _failures = new(clock);
 
-    private static readonly TimeSpan FailureWindow = TimeSpan.FromMinutes(5);
-
-    private readonly ConcurrentDictionary<string, (int Failures, DateTime Since)> _failures =
-        new(StringComparer.Ordinal);
-
-    private readonly DateTime _started = DateTime.UtcNow;
+    private readonly DateTimeOffset _started = clock.UtcNow;
 
     public async Task RunAsync(CancellationToken ct)
     {
@@ -137,7 +132,7 @@ public sealed class AdminServer(
             return;
         }
 
-        _failures.TryRemove(Origin(context), out _);
+        _failures.Clear(Origin(context));
 
         switch (path, method)
         {
@@ -250,7 +245,7 @@ public sealed class AdminServer(
         {
             ["version"] = Version,
             ["port"] = servicePort,
-            ["uptimeSeconds"] = (long)(DateTime.UtcNow - _started).TotalSeconds,
+            ["uptimeSeconds"] = (long)(clock.UtcNow - _started).TotalSeconds,
             ["openMailboxes"] = counters.OpenMailboxes,
             ["pendingAnnouncements"] = counters.PendingAnnouncements,
             ["matches"] = counters.Matches,
@@ -274,31 +269,12 @@ public sealed class AdminServer(
            || request.Headers["Sec-Fetch-Mode"] is null
               && request.Headers["Accept"]?.Contains("text/html", StringComparison.Ordinal) is true;
 
-    /// <summary>
-    /// Fait attendre celui qui enchaîne les essais ratés.
-    /// </summary>
-    /// <remarks>
-    /// Un jeton de trente-deux octets ne se devine pas, donc ce délai ne protège
-    /// pas le secret : il évite qu'un proxy mal réglé ou un robot ne remplisse
-    /// le journal et ne consomme la machine à raison de mille essais par
-    /// seconde. Il croît avec les échecs et s'efface au premier succès.
-    /// </remarks>
     private async Task SlowDownAsync(HttpListenerContext context)
     {
-        var origin = Origin(context);
-        var now = DateTime.UtcNow;
+        var penalty = _failures.Record(Origin(context));
 
-        var state = _failures.AddOrUpdate(
-            origin,
-            _ => (1, now),
-            (_, previous) => now - previous.Since > FailureWindow ? (1, now) : (previous.Failures + 1, previous.Since));
-
-        if (state.Failures <= FailuresBeforeSlowing)
-            return;
-
-        var penalty = Math.Min(state.Failures - FailuresBeforeSlowing, 10) * 500;
-
-        await Task.Delay(penalty).ConfigureAwait(false);
+        if (penalty > TimeSpan.Zero)
+            await Task.Delay(penalty).ConfigureAwait(false);
     }
 
     private static string Origin(HttpListenerContext context)

@@ -1,3 +1,4 @@
+using Linkpearl.Core.Abstractions;
 using Linkpearl.Core.Transport.Rendezvous;
 
 namespace Linkpearl.Rendezvous;
@@ -24,8 +25,10 @@ namespace Linkpearl.Rendezvous;
 /// que l'opérateur lit et approuve en déplaçant la ligne. C'est ce qui empêche
 /// l'annuaire de devenir une autorité par accumulation.
 /// </remarks>
-public sealed class PeerDirectory(string peersPath, string pendingPath)
+public sealed class PeerDirectory(string peersPath, string pendingPath, IClock? clock = null)
 {
+    private readonly IClock _clock = clock ?? new SystemClock();
+
     /// <summary>Une candidature par adresse source et par heure.</summary>
     /// <remarks>
     /// Sans ce frein, la file se remplit toute seule et l'opérateur cesse de la
@@ -36,7 +39,17 @@ public sealed class PeerDirectory(string peersPath, string pendingPath)
     private const int MaxPending = 256;
 
     private readonly Lock _gate = new();
-    private readonly Dictionary<string, DateTime> _lastSubmit = [];
+    private readonly Dictionary<string, DateTimeOffset> _lastSubmit = [];
+
+    /// <summary>Les sources de candidatures encore freinées.</summary>
+    public int TrackedSubmitters
+    {
+        get
+        {
+            lock (_gate)
+                return _lastSubmit.Count;
+        }
+    }
 
     private List<DirectoryEntry> _known = [];
     private DateTime _knownStamp = DateTime.MinValue;
@@ -57,8 +70,17 @@ public sealed class PeerDirectory(string peersPath, string pendingPath)
 
         lock (_gate)
         {
-            if (_lastSubmit.TryGetValue(sourceAddress, out var last)
-                && DateTime.UtcNow - last < SubmitInterval)
+            var now = _clock.UtcNow;
+
+            // Une source dont le frein est levé n'a plus à être retenue : sans
+            // cette purge, chaque adresse jamais vue resterait ici pour toujours.
+            foreach (var (source, when) in _lastSubmit.ToList())
+            {
+                if (now - when >= SubmitInterval)
+                    _lastSubmit.Remove(source);
+            }
+
+            if (_lastSubmit.ContainsKey(sourceAddress))
                 return false;
 
             var pending = Read(pendingPath);
@@ -75,7 +97,7 @@ public sealed class PeerDirectory(string peersPath, string pendingPath)
             pending.Add(entry);
             Write(pendingPath, pending);
 
-            _lastSubmit[sourceAddress] = DateTime.UtcNow;
+            _lastSubmit[sourceAddress] = now;
             return true;
         }
     }

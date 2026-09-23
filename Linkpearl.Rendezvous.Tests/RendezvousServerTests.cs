@@ -158,3 +158,187 @@ public sealed class ConnectionLimitTests
         Assert.True(await second.IsSilentAsync(Short));
     }
 }
+
+/// <summary>Ce que le limiteur compte, et ce que les plafonds retiennent.</summary>
+public sealed class LimiterTests
+{
+    private static readonly TimeSpan Short = TimeSpan.FromMilliseconds(400);
+
+    private static byte[] Ticket(byte seed) => Enumerable.Repeat(seed, RendezvousTicket.SizeInBytes).ToArray();
+
+    private static byte[] Box(byte seed) => Enumerable.Repeat(seed, RendezvousWire.MailboxAddressSize).ToArray();
+
+    private static byte[] Invitation(byte seed) => Enumerable.Repeat(seed, RendezvousWire.InvitationTicketSize).ToArray();
+
+    private static byte[] Announce(byte[] sealedCandidates, params byte[][] tickets)
+        => RendezvousWire.Announce(new Announcement(tickets, sealedCandidates));
+
+    private static async Task AssertErrorAsync(TestClient client, string fragment)
+    {
+        var frame = await client.ReadFrameAsync();
+
+        Assert.NotNull(frame);
+        Assert.Equal(RendezvousKind.Error, frame[0]);
+        Assert.Contains(fragment, System.Text.Encoding.UTF8.GetString(frame, 1, frame.Length - 1));
+    }
+
+    [Fact]
+    public async Task Ouvrir_des_boites_compte_dans_le_limiteur()
+    {
+        // Sans cela, ouvrir des boîtes était la seule trame gratuite, donc la
+        // seule qu'un client pouvait répéter mille fois par seconde.
+        await using var harness = await ServerHarness.StartAsync(new RendezvousLimits { AnnouncementsPerMinute = 2 });
+
+        var client = await harness.ConnectAsync();
+        await client.SendAsync(RendezvousWire.MailboxOpen([Box(1)]));
+        await client.SendAsync(RendezvousWire.MailboxOpen([Box(2)]));
+        await client.SendAsync(RendezvousWire.MailboxOpen([Box(3)]));
+
+        await AssertErrorAsync(client, "trop");
+    }
+
+    [Fact]
+    public async Task Demander_un_relais_compte_dans_le_limiteur()
+    {
+        await using var harness = await ServerHarness.StartAsync(new RendezvousLimits { AnnouncementsPerMinute = 1 });
+
+        var first = await harness.ConnectAsync();
+        await first.SendAsync(RendezvousWire.RelayOpen(Ticket(0x11)));
+        Assert.True(await first.IsSilentAsync(Short));
+
+        var second = await harness.ConnectAsync();
+        await second.SendAsync(RendezvousWire.RelayOpen(Ticket(0x22)));
+
+        await AssertErrorAsync(second, "trop");
+    }
+
+    [Fact]
+    public async Task Une_session_ne_tient_pas_plus_de_boites_que_le_plafond()
+    {
+        await using var harness = await ServerHarness.StartAsync(new RendezvousLimits { MaxMailboxesPerSession = 2 });
+
+        var client = await harness.ConnectAsync();
+        await client.SendAsync(RendezvousWire.MailboxOpen([Box(1), Box(2)]));
+
+        // Rouvrir les mêmes ne compte pas : le plugin le fait à chaque fenêtre.
+        await client.SendAsync(RendezvousWire.MailboxOpen([Box(1), Box(2)]));
+        Assert.True(await client.IsSilentAsync(Short));
+        Assert.Equal(2, harness.Server.Snapshot().OpenMailboxes);
+
+        await client.SendAsync(RendezvousWire.MailboxOpen([Box(3)]));
+
+        await AssertErrorAsync(client, "trop de boîtes");
+    }
+
+    [Fact]
+    public async Task Une_session_nattend_pas_sur_plus_de_jetons_que_le_plafond()
+    {
+        await using var harness = await ServerHarness.StartAsync(new RendezvousLimits { MaxWaitingKeysPerSession = 2 });
+
+        var client = await harness.ConnectAsync();
+        await client.SendAsync(Announce([1], Ticket(0x11), Ticket(0x12)));
+        Assert.True(await client.IsSilentAsync(Short));
+
+        await client.SendAsync(Announce([1], Ticket(0x13)));
+
+        await AssertErrorAsync(client, "trop");
+    }
+
+    [Fact]
+    public async Task Les_invitations_sont_plafonnees_par_adresse()
+    {
+        await using var harness = await ServerHarness.StartAsync(new RendezvousLimits { MaxInvitationsPerAddress = 2 });
+
+        var client = await harness.ConnectAsync();
+
+        for (byte seed = 1; seed <= 2; seed++)
+        {
+            await client.SendAsync(RendezvousWire.TicketRegister(Invitation(seed), [seed]));
+            Assert.Equal(RendezvousKind.TicketAccepted, (await client.ReadFrameAsync())![0]);
+        }
+
+        await client.SendAsync(RendezvousWire.TicketRegister(Invitation(3), [3]));
+        await AssertErrorAsync(client, "trop d'invitations");
+
+        // La connexion tient : un refus de dépôt n'est pas une faute de protocole.
+        await client.SendAsync(RendezvousWire.TicketRedeem(Invitation(1)));
+        Assert.Equal(RendezvousKind.TicketPayload, (await client.ReadFrameAsync())![0]);
+
+        // Et la place retirée se reprend.
+        await client.SendAsync(RendezvousWire.TicketRegister(Invitation(3), [3]));
+        Assert.Equal(RendezvousKind.TicketAccepted, (await client.ReadFrameAsync())![0]);
+    }
+
+    [Fact]
+    public async Task Les_invitations_sont_plafonnees_au_total()
+    {
+        await using var harness = await ServerHarness.StartAsync(new RendezvousLimits { MaxInvitations = 1 });
+
+        var client = await harness.ConnectAsync();
+        await client.SendAsync(RendezvousWire.TicketRegister(Invitation(1), [1]));
+        Assert.Equal(RendezvousKind.TicketAccepted, (await client.ReadFrameAsync())![0]);
+
+        // Redéposer le même ticket remplace, sans compter double.
+        await client.SendAsync(RendezvousWire.TicketRegister(Invitation(1), [9]));
+        Assert.Equal(RendezvousKind.TicketAccepted, (await client.ReadFrameAsync())![0]);
+
+        await client.SendAsync(RendezvousWire.TicketRegister(Invitation(2), [2]));
+        await AssertErrorAsync(client, "trop d'invitations");
+        Assert.Equal(1, harness.Server.Snapshot().PendingInvitations);
+    }
+
+    [Fact]
+    public async Task Une_invitation_expiree_libere_sa_place()
+    {
+        await using var harness = await ServerHarness.StartAsync(new RendezvousLimits { MaxInvitations = 1 });
+
+        var client = await harness.ConnectAsync();
+        await client.SendAsync(RendezvousWire.TicketRegister(Invitation(1), [1]));
+        Assert.Equal(RendezvousKind.TicketAccepted, (await client.ReadFrameAsync())![0]);
+
+        harness.Clock.Advance(TimeSpan.FromHours(25));
+        harness.Server.Sweep();
+        Assert.Equal(0, harness.Server.Snapshot().PendingInvitations);
+
+        await client.SendAsync(RendezvousWire.TicketRegister(Invitation(2), [2]));
+        Assert.Equal(RendezvousKind.TicketAccepted, (await client.ReadFrameAsync())![0]);
+    }
+
+    [Fact]
+    public async Task Un_relais_sans_partenaire_est_abandonne_apres_le_delai()
+    {
+        // Sans cela, n'importe qui immobilisait une socket pour toujours en
+        // demandant un relais que personne ne viendrait rejoindre.
+        await using var harness = await ServerHarness.StartAsync();
+
+        var alone = await harness.ConnectAsync();
+        await alone.SendAsync(RendezvousWire.RelayOpen(Ticket(0x11)));
+        Assert.True(await alone.IsSilentAsync(Short));
+        Assert.Equal(1, harness.Server.Snapshot().RelayWaiting);
+
+        harness.Clock.Advance(RendezvousLimits.Default.RelayWaitTimeout + TimeSpan.FromSeconds(1));
+        harness.Server.Sweep();
+
+        await AssertErrorAsync(alone, "relais");
+        Assert.True(await alone.IsClosedAsync(TimeSpan.FromSeconds(5)));
+        Assert.Equal(0, harness.Server.Snapshot().RelayWaiting);
+    }
+
+    [Fact]
+    public async Task Les_adresses_suivies_par_le_limiteur_sont_oubliees()
+    {
+        // Sans purge, le limiteur garde une entrée par adresse jamais vue,
+        // pour toujours.
+        await using var harness = await ServerHarness.StartAsync();
+
+        var client = await harness.ConnectAsync();
+        await client.SendAsync(RendezvousWire.MailboxOpen([Box(1)]));
+        Assert.True(await client.IsSilentAsync(Short));
+        Assert.Equal(1, harness.Server.Snapshot().TrackedAddresses);
+
+        harness.Clock.Advance(TimeSpan.FromMinutes(2));
+        harness.Server.Sweep();
+
+        Assert.Equal(0, harness.Server.Snapshot().TrackedAddresses);
+    }
+}
