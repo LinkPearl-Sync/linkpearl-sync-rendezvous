@@ -90,10 +90,22 @@ public sealed class RendezvousServer(
     /// de retoucher chaque chemin de code. Aucune trame ne les expose.
     /// </remarks>
     public sealed record Counters(
-        int OpenMailboxes, int PendingAnnouncements, int RelayWaiting, int PendingInvitations,
-        long Matches, long RelayedBytes,
+        int OpenMailboxes, int PendingAnnouncements, int RelayWaiting, int ActiveRelays, int PendingInvitations,
+        long Matches, long Relays, long RelayedBytes,
         int Connections, long RefusedConnections, long RateRefusals, int TrackedAddresses,
-        int KnownPeers, int PendingSubmissions);
+        int KnownPeers, int PendingSubmissions,
+        Refusals Refusals);
+
+    /// <summary>
+    /// Les refus du limiteur, ventilés par ce qui était demandé.
+    /// </summary>
+    /// <remarks>
+    /// Un total seul ne dit pas si c'est un client qui annonce en boucle ou
+    /// quelqu'un qui parcourt l'espace des tickets d'invitation : la réponse
+    /// de l'opérateur n'est pas la même. Les connexions refusées viennent des
+    /// plafonds et non du limiteur, mais elles se lisent au même endroit.
+    /// </remarks>
+    public sealed record Refusals(long Announce, long Mailbox, long Relay, long Invitation, long Connection);
 
     public Counters Snapshot()
     {
@@ -107,18 +119,45 @@ public sealed class RendezvousServer(
         lock (_mailboxGate)
             mailboxes = _mailboxes.Count;
 
+        var refusedConnections = Interlocked.Read(ref _refusedConnections);
+
         return new(
-            mailboxes, _waiting.Count, _relayWaiting.Count, invitations,
-            Interlocked.Read(ref _matched), PeerSession.TotalRelayedBytes,
-            Volatile.Read(ref _connections), Interlocked.Read(ref _refusedConnections),
+            mailboxes, _waiting.Count, _relayWaiting.Count, Volatile.Read(ref _activeRelays), invitations,
+            Interlocked.Read(ref _matched), Interlocked.Read(ref _relayed), PeerSession.TotalRelayedBytes,
+            Volatile.Read(ref _connections), refusedConnections,
             Interlocked.Read(ref _rateRefusals), _rate.Count,
-            directory.Known().Count, directory.Pending().Count);
+            directory.Known().Count, directory.Pending().Count,
+            new Refusals(
+                Interlocked.Read(ref _refusedAnnounces), Interlocked.Read(ref _refusedMailboxes),
+                Interlocked.Read(ref _refusedRelays), Interlocked.Read(ref _refusedInvitations),
+                refusedConnections));
     }
 
     private long _rateRefusals;
+    private long _refusedAnnounces;
+    private long _refusedMailboxes;
+    private long _refusedRelays;
+    private long _refusedInvitations;
 
     private int _connections;
+    private int _activeRelays;
     private long _refusedConnections;
+
+    /// <summary>La boucle qui accepte les connexions TCP.</summary>
+    public LoopHealth AcceptLoop { get; } = new(clock);
+
+    /// <summary>La boucle qui répond aux sondes UDP de réflexion.</summary>
+    public LoopHealth ReflectLoop { get; } = new(clock);
+
+    /// <summary>
+    /// Vrai quand les deux boucles tournent.
+    /// </summary>
+    /// <remarks>
+    /// C'est ce qu'un superviseur doit regarder : un processus debout dont une
+    /// boucle est morte est pire qu'un processus tombé, parce que personne ne
+    /// le redémarre.
+    /// </remarks>
+    public bool Healthy => AcceptLoop.Alive && ReflectLoop.Alive;
 
     /// <summary>Connexions tenues par seau d'adresses, pour le plafond par adresse.</summary>
     private readonly ConcurrentDictionary<string, int> _connectionsPerBucket = new(StringComparer.Ordinal);
@@ -226,6 +265,8 @@ public sealed class RendezvousServer(
             _ = Task.Run(() => ReflectAsync(reflection, ct), ct);
             _ = Task.Run(() => ExpireAsync(ct), ct);
 
+            AcceptLoop.Enter();
+
             while (ct.IsCancellationRequested is false)
             {
                 TcpClient client;
@@ -245,11 +286,17 @@ public sealed class RendezvousServer(
                     continue;
                 }
 
+                AcceptLoop.Turn();
                 Admit(client, ct);
             }
         }
         finally
         {
+            // Le drapeau tombe quelle que soit la sortie : c'est ce que
+            // /healthz regarde, et une sortie par exception est précisément
+            // le cas où il doit tomber.
+            AcceptLoop.Exit();
+
             // Rendre les ports tout de suite : un test qui enchaîne des
             // services, ou un redémarrage rapide, ne doit pas tomber sur un
             // port encore tenu par l'instance précédente.
@@ -259,40 +306,51 @@ public sealed class RendezvousServer(
     }
 
     /// <summary>Renvoie à un client l'adresse d'où on le voit.</summary>
-    private static async Task ReflectAsync(UdpClient reflection, CancellationToken ct)
+    private async Task ReflectAsync(UdpClient reflection, CancellationToken ct)
     {
-        while (ct.IsCancellationRequested is false)
+        ReflectLoop.Enter();
+
+        try
         {
-            try
+            while (ct.IsCancellationRequested is false)
             {
-                var received = await reflection.ReceiveAsync(ct).ConfigureAwait(false);
+                try
+                {
+                    var received = await reflection.ReceiveAsync(ct).ConfigureAwait(false);
 
-                if (received.Buffer.Length == 0 || received.Buffer[0] != RendezvousKind.Reflect)
-                    continue;
+                    ReflectLoop.Turn();
 
-                var from = Normalize(received.RemoteEndPoint);
-                var address = from.Address.GetAddressBytes();
+                    if (received.Buffer.Length == 0 || received.Buffer[0] != RendezvousKind.Reflect)
+                        continue;
 
-                var reply = new byte[2 + address.Length + 2];
-                reply[0] = RendezvousKind.Reflected;
-                reply[1] = (byte)address.Length;
-                address.CopyTo(reply.AsSpan(2));
-                BinaryPrimitives.WriteUInt16BigEndian(reply.AsSpan(2 + address.Length), (ushort)from.Port);
+                    var from = Normalize(received.RemoteEndPoint);
+                    var address = from.Address.GetAddressBytes();
 
-                // L'envoi est dans le même filet que la réception : une
-                // destination injoignable fait lever l'envoi sur certaines
-                // plateformes, et une seule exception tuait la réflexion pour
-                // toujours, sans que le service paraisse mort.
-                await reflection.SendAsync(reply, received.RemoteEndPoint, ct).ConfigureAwait(false);
+                    var reply = new byte[2 + address.Length + 2];
+                    reply[0] = RendezvousKind.Reflected;
+                    reply[1] = (byte)address.Length;
+                    address.CopyTo(reply.AsSpan(2));
+                    BinaryPrimitives.WriteUInt16BigEndian(reply.AsSpan(2 + address.Length), (ushort)from.Port);
+
+                    // L'envoi est dans le même filet que la réception : une
+                    // destination injoignable fait lever l'envoi sur certaines
+                    // plateformes, et une seule exception tuait la réflexion pour
+                    // toujours, sans que le service paraisse mort.
+                    await reflection.SendAsync(reply, received.RemoteEndPoint, ct).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    return;
+                }
+                catch (Exception)
+                {
+                    // Datagramme illisible ou destination injoignable : au suivant.
+                }
             }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
-            {
-                return;
-            }
-            catch (Exception)
-            {
-                // Datagramme illisible ou destination injoignable : au suivant.
-            }
+        }
+        finally
+        {
+            ReflectLoop.Exit();
         }
     }
 
@@ -469,7 +527,7 @@ public sealed class RendezvousServer(
 
     private async Task<bool> HandleAnnounceAsync(PeerSession session, byte[] frame, CancellationToken ct)
     {
-        if (RateExceeded(session.Bucket))
+        if (RateExceeded(session.Bucket, ref _refusedAnnounces))
         {
             await session.SendAsync(RendezvousWire.Error("trop d'annonces"), ct).ConfigureAwait(false);
             return false;
@@ -546,7 +604,7 @@ public sealed class RendezvousServer(
 
         // Comptée comme une annonce : une demande de relais gare une socket
         // jusqu'à l'expiration, et c'est la trame la plus coûteuse à offrir.
-        if (RateExceeded(session.Bucket))
+        if (RateExceeded(session.Bucket, ref _refusedRelays))
         {
             await session.SendAsync(RendezvousWire.Error("trop de demandes de relais"), ct).ConfigureAwait(false);
             return false;
@@ -566,7 +624,18 @@ public sealed class RendezvousServer(
                 Note("relais ouvert", $"[{key[..8]}] {partner.Session.Address} et {session.Address}");
 
                 await session.SendAsync(RendezvousWire.Simple(RendezvousKind.RelayReady), ct).ConfigureAwait(false);
-                await PeerSession.PipeAsync(partner.Session, session, ct).ConfigureAwait(false);
+
+                Interlocked.Increment(ref _activeRelays);
+
+                try
+                {
+                    await PeerSession.PipeAsync(partner.Session, session, ct).ConfigureAwait(false);
+                }
+                finally
+                {
+                    Interlocked.Decrement(ref _activeRelays);
+                }
+
                 return true;
             }
 
@@ -588,7 +657,7 @@ public sealed class RendezvousServer(
         if (payloadLength is <= 0 or > RendezvousWire.MaxTicketPayloadLength)
             return false;
 
-        if (RateExceeded(session.Bucket))
+        if (RateExceeded(session.Bucket, ref _refusedInvitations))
         {
             await session.SendAsync(RendezvousWire.Error("trop de dépôts"), ct).ConfigureAwait(false);
             return false;
@@ -667,7 +736,7 @@ public sealed class RendezvousServer(
 
         // Le plafond d'essais est ce qui rend les quarante-huit bits du ticket
         // suffisants : sans lui, on pourrait les parcourir.
-        if (RateExceeded(session.Bucket))
+        if (RateExceeded(session.Bucket, ref _refusedInvitations))
         {
             await session.SendAsync(RendezvousWire.Error("trop d'essais"), ct).ConfigureAwait(false);
             return false;
@@ -697,7 +766,7 @@ public sealed class RendezvousServer(
         if (RendezvousWire.TryReadAddresses(frame, out var addresses, out _) is false)
             return false;
 
-        if (RateExceeded(session.Bucket))
+        if (RateExceeded(session.Bucket, ref _refusedMailboxes))
         {
             await session.SendAsync(RendezvousWire.Error("trop d'ouvertures"), ct).ConfigureAwait(false);
             return false;
@@ -735,7 +804,7 @@ public sealed class RendezvousServer(
             return false;
         }
 
-        if (RateExceeded(session.Bucket))
+        if (RateExceeded(session.Bucket, ref _refusedMailboxes))
         {
             await session.SendAsync(RendezvousWire.Error("trop d'interrogations"), ct).ConfigureAwait(false);
             return false;
@@ -772,7 +841,7 @@ public sealed class RendezvousServer(
         if (payloadLength is <= 0 or > RendezvousWire.MaxDepositLength)
             return false;
 
-        if (RateExceeded(session.Bucket))
+        if (RateExceeded(session.Bucket, ref _refusedMailboxes))
         {
             await session.SendAsync(RendezvousWire.Error("trop de dépôts"), ct).ConfigureAwait(false);
             return false;
@@ -803,7 +872,11 @@ public sealed class RendezvousServer(
         return true;
     }
 
-    private bool RateExceeded(string bucket)
+    /// <summary>
+    /// Compte une trame pour cette adresse, et dit si elle dépasse le débit.
+    /// </summary>
+    /// <param name="refused">Le compteur du motif, incrémenté en plus du total.</param>
+    private bool RateExceeded(string bucket, ref long refused)
     {
         var now = clock.UtcNow;
         var entry = _rate.AddOrUpdate(
@@ -817,6 +890,7 @@ public sealed class RendezvousServer(
             return false;
 
         Interlocked.Increment(ref _rateRefusals);
+        Interlocked.Increment(ref refused);
         return true;
     }
 

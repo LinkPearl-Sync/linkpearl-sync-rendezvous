@@ -22,14 +22,16 @@ public sealed class AdminServerTests : IAsyncLifetime
 
     private PeerDirectory _directory = null!;
     private BanStore _bans = null!;
+    private RendezvousServer _service = null!;
     private string _token = null!;
     private string _root = null!;
     private Task _running = null!;
+    private Task _serving = null!;
 
     private string PeersPath => Path.Combine(_dir, "peers.txt");
     private string PendingPath => Path.Combine(_dir, "pending.txt");
 
-    public Task InitializeAsync()
+    public async Task InitializeAsync()
     {
         Directory.CreateDirectory(_dir);
 
@@ -37,27 +39,42 @@ public sealed class AdminServerTests : IAsyncLifetime
         _bans = new BanStore(Path.Combine(_dir, "bans.json"));
         _token = AdminToken.LoadOrCreate(Path.Combine(_dir, "admin.token"));
 
+        // Le service tourne pour de vrai, sur un port éphémère : la santé
+        // qu'expose la console est celle de ses boucles, pas un drapeau posé
+        // par le test. Il est lancé avant de sonder un port pour la console :
+        // dans l'autre ordre, le système pouvait lui donner le port que la
+        // sonde venait de libérer, et l'écouteur HTTP tombait dessus.
+        _service = new RendezvousServer(0, _directory, RendezvousLimits.Default, new ManualClock()) { Log = TextWriter.Null };
+        _serving = _service.RunAsync(_stopping.Token);
+        var servicePort = await _service.Listening.WaitAsync(TimeSpan.FromSeconds(5));
+
+        // La réflexion démarre dans une tâche à part et entre dans sa boucle
+        // quelques millisecondes après l'écoute : on l'attend, sans quoi la
+        // santé lue par le premier appel dépendrait de l'ordonnanceur.
+        for (var i = 0; i < 200 && _service.Healthy is false; i++)
+            await Task.Delay(10);
+
         var port = FreePort();
         _root = $"http://127.0.0.1:{port}";
 
-        var service = new RendezvousServer(47900, _directory, RendezvousLimits.Default, new ManualClock());
-        _running = new AdminServer(localOnly: true, port, 47900, _token, service, _directory, _bans, new ManualClock())
+        _running = new AdminServer(localOnly: true, port, servicePort, _token, _service, _directory, _bans, new ManualClock())
             .RunAsync(_stopping.Token);
-
-        return Task.CompletedTask;
     }
 
     public async Task DisposeAsync()
     {
         await _stopping.CancelAsync();
 
-        try
+        foreach (var task in new[] { _running, _serving })
         {
-            await _running;
-        }
-        catch (Exception)
-        {
-            // L'arrêt ferme l'écouteur sous les pieds de l'accepteur.
+            try
+            {
+                await task;
+            }
+            catch (Exception)
+            {
+                // L'arrêt ferme l'écouteur sous les pieds de l'accepteur.
+            }
         }
 
         _client.Dispose();
@@ -171,9 +188,65 @@ public sealed class AdminServerTests : IAsyncLifetime
         var state = JsonNode.Parse(await response.Content.ReadAsStringAsync())!;
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        Assert.Equal(47900, state["port"]!.GetValue<int>());
-        Assert.Equal(0, state["openMailboxes"]!.GetValue<int>());
+        Assert.Equal(_service.Port, state["port"]!.GetValue<int>());
+        Assert.Equal(0, state["counters"]!["openMailboxes"]!.GetValue<int>());
         Assert.Equal("rdv.exemple.ch", state["known"]![0]!["address"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task Letat_dit_la_version_la_memoire_et_la_sante_des_boucles()
+    {
+        var state = JsonNode.Parse(await (await SendAsync(HttpMethod.Get, "/api/status")).Content.ReadAsStringAsync())!;
+
+        Assert.NotEqual("", state["version"]!.GetValue<string>());
+        Assert.True(state["memory"]!["workingSetBytes"]!.GetValue<long>() > 0);
+        Assert.True(state["memory"]!["gcHeapBytes"]!.GetValue<long>() > 0);
+        Assert.True(state["health"]!["healthy"]!.GetValue<bool>());
+        Assert.True(state["health"]!["accept"]!["alive"]!.GetValue<bool>());
+        Assert.True(state["health"]!["reflect"]!["alive"]!.GetValue<bool>());
+        Assert.NotNull(state["health"]!["accept"]!["lastTurn"]);
+    }
+
+    [Fact]
+    public async Task Letat_ventile_les_refus_par_motif()
+    {
+        var state = JsonNode.Parse(await (await SendAsync(HttpMethod.Get, "/api/status")).Content.ReadAsStringAsync())!;
+
+        foreach (var reason in new[] { "announce", "mailbox", "relay", "invitation", "connection" })
+            Assert.Equal(0, state["refusals"]![reason]!.GetValue<long>());
+    }
+
+    [Fact]
+    public async Task La_sante_se_lit_sans_jeton_et_ne_dit_rien_dautre()
+    {
+        // Un superviseur n'a pas de jeton, et une réponse publique ne doit
+        // rien apprendre à qui la lit : un oui, c'est tout.
+        var response = await _client.GetAsync($"{_root}/healthz");
+        var body = await response.Content.ReadAsStringAsync();
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("""{"ok":true}""", body);
+    }
+
+    [Fact]
+    public async Task Un_service_dont_les_boucles_ne_tournent_pas_rend_503()
+    {
+        // Un service construit et jamais lancé, ou dont la boucle est morte :
+        // la console tient, mais elle doit dire que le service ne sert pas.
+        var idle = new RendezvousServer(0, _directory, RendezvousLimits.Default, new ManualClock());
+        var port = FreePort();
+
+        using var stopping = new CancellationTokenSource();
+        var running = new AdminServer(localOnly: true, port, 0, _token, idle, _directory, _bans, new ManualClock())
+            .RunAsync(stopping.Token);
+
+        var response = await _client.GetAsync($"http://127.0.0.1:{port}/healthz");
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.Equal("""{"ok":false}""", await response.Content.ReadAsStringAsync());
+
+        await stopping.CancelAsync();
+        await running.ContinueWith(_ => { });
     }
 
     [Fact]

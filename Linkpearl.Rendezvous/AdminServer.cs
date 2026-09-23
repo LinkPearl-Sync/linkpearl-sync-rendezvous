@@ -109,12 +109,24 @@ public sealed class AdminServer(
         var path = context.Request.Url?.AbsolutePath ?? "/";
         var method = context.Request.HttpMethod;
 
-        // Une seule chose est publique, et à dessein : la liste de
-        // bannissement, que les clients téléchargent. Elle ne porte que des
-        // empreintes lentes, inexploitables sans le nom. Tout le reste, la page
-        // comprise, demande le jeton : une console qui s'affiche à qui la
-        // demande annonce au monde ce qui tourne ici, et invite à essayer.
-        var open = path is "/api/bans" && method is "GET";
+        // Deux choses sont publiques, et à dessein : la liste de bannissement,
+        // que les clients téléchargent, et qui ne porte que des empreintes
+        // lentes, inexploitables sans le nom ; et la santé, qu'un superviseur
+        // interroge sans jeton et qui ne dit qu'un oui ou un non. Tout le
+        // reste, la page comprise, demande le jeton : une console qui
+        // s'affiche à qui la demande annonce au monde ce qui tourne ici, et
+        // invite à essayer.
+        var open = method is "GET" && path is "/api/bans" or "/healthz";
+
+        if (path is "/healthz" && method is "GET")
+        {
+            // 503 et non 500 : c'est le code que les superviseurs lisent comme
+            // « à redémarrer », et le corps ne porte aucun détail, puisque
+            // n'importe qui peut le demander.
+            var healthy = service.Healthy;
+            Respond(context, healthy ? 200 : 503, "application/json", healthy ? """{"ok":true}""" : """{"ok":false}""");
+            return;
+        }
 
         if (open is false && AdminToken.Matches(token, context.Request.Headers["Authorization"]) is false)
         {
@@ -267,11 +279,45 @@ public sealed class AdminServer(
         {
             ["version"] = Version,
             ["port"] = servicePort,
+            ["startedAt"] = _started.ToUnixTimeSeconds(),
             ["uptimeSeconds"] = (long)(clock.UtcNow - _started).TotalSeconds,
-            ["openMailboxes"] = counters.OpenMailboxes,
-            ["pendingAnnouncements"] = counters.PendingAnnouncements,
-            ["matches"] = counters.Matches,
-            ["relayedBytes"] = counters.RelayedBytes,
+            ["memory"] = new JsonObject
+            {
+                // L'ensemble de travail est ce que l'opérateur voit dans top ;
+                // le tas géré est ce que le service tient vraiment. L'écart
+                // entre les deux, c'est le runtime et les tampons réseau.
+                ["workingSetBytes"] = Environment.WorkingSet,
+                ["gcHeapBytes"] = GC.GetTotalMemory(forceFullCollection: false),
+            },
+            ["health"] = new JsonObject
+            {
+                ["healthy"] = service.Healthy,
+                ["accept"] = Loop(service.AcceptLoop),
+                ["reflect"] = Loop(service.ReflectLoop),
+            },
+            ["counters"] = new JsonObject
+            {
+                ["openMailboxes"] = counters.OpenMailboxes,
+                ["pendingAnnouncements"] = counters.PendingAnnouncements,
+                ["relayWaiting"] = counters.RelayWaiting,
+                ["activeRelays"] = counters.ActiveRelays,
+                ["pendingInvitations"] = counters.PendingInvitations,
+                ["matches"] = counters.Matches,
+                ["relays"] = counters.Relays,
+                ["relayedBytes"] = counters.RelayedBytes,
+                ["connections"] = counters.Connections,
+                ["refusedConnections"] = counters.RefusedConnections,
+                ["rateRefusals"] = counters.RateRefusals,
+                ["trackedAddresses"] = counters.TrackedAddresses,
+            },
+            ["refusals"] = new JsonObject
+            {
+                ["announce"] = counters.Refusals.Announce,
+                ["mailbox"] = counters.Refusals.Mailbox,
+                ["relay"] = counters.Refusals.Relay,
+                ["invitation"] = counters.Refusals.Invitation,
+                ["connection"] = counters.Refusals.Connection,
+            },
             ["known"] = known,
             ["pending"] = pending,
             ["bans"] = banned,
@@ -279,6 +325,13 @@ public sealed class AdminServer(
 
         return document.ToJsonString();
     }
+
+    private static JsonObject Loop(LoopHealth loop)
+        => new()
+        {
+            ["alive"] = loop.Alive,
+            ["lastTurn"] = loop.LastTurn?.ToUnixTimeSeconds(),
+        };
 
     private static bool IsJson(string? contentType)
         => contentType is not null

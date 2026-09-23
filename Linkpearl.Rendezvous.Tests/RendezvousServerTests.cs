@@ -555,3 +555,67 @@ public sealed class LogTests
         Assert.DoesNotContain("0a0a", log);
     }
 }
+
+/// <summary>Ce que le service dit de sa propre santé, et de ce qu'il refuse.</summary>
+public sealed class HealthTests
+{
+    private static byte[] Box(byte seed) => Enumerable.Repeat(seed, RendezvousWire.MailboxAddressSize).ToArray();
+
+    [Fact]
+    public async Task Les_deux_boucles_se_declarent_vivantes_puis_mortes_a_larret()
+    {
+        var harness = await ServerHarness.StartAsync();
+
+        // La réflexion démarre dans une tâche à part : on lui laisse le temps
+        // d'entrer dans sa boucle, ce qui se compte en millisecondes.
+        for (var i = 0; i < 100 && harness.Server.Healthy is false; i++)
+            await Task.Delay(10);
+
+        Assert.True(harness.Server.AcceptLoop.Alive);
+        Assert.True(harness.Server.ReflectLoop.Alive);
+        Assert.True(harness.Server.Healthy);
+        Assert.NotNull(harness.Server.AcceptLoop.LastTurn);
+
+        await harness.DisposeAsync();
+
+        for (var i = 0; i < 100 && harness.Server.ReflectLoop.Alive; i++)
+            await Task.Delay(10);
+
+        Assert.False(harness.Server.AcceptLoop.Alive);
+        Assert.False(harness.Server.ReflectLoop.Alive);
+        Assert.False(harness.Server.Healthy);
+    }
+
+    [Fact]
+    public void Un_service_jamais_lance_nest_pas_sain()
+    {
+        var idle = new RendezvousServer(0, new PeerDirectory("peers.txt", "pending.txt"), RendezvousLimits.Default, new ManualClock());
+
+        Assert.False(idle.Healthy);
+        Assert.Null(idle.AcceptLoop.LastTurn);
+    }
+
+    [Fact]
+    public async Task Les_refus_sont_ventiles_par_motif()
+    {
+        // Un total seul ne dit pas quoi faire : un client qui ouvre des boîtes
+        // en boucle et quelqu'un qui parcourt les tickets d'invitation
+        // n'appellent pas la même réponse.
+        await using var harness = await ServerHarness.StartAsync(new RendezvousLimits { AnnouncementsPerMinute = 1 });
+
+        var client = await harness.ConnectAsync();
+        await client.SendAsync(RendezvousWire.MailboxOpen([Box(1)]));
+        await client.SendAsync(RendezvousWire.MailboxOpen([Box(2)]));
+
+        var frame = await client.ReadFrameAsync();
+        Assert.Equal(RendezvousKind.Error, frame![0]);
+
+        var refusals = harness.Server.Snapshot().Refusals;
+
+        Assert.Equal(1, refusals.Mailbox);
+        Assert.Equal(0, refusals.Announce);
+        Assert.Equal(0, refusals.Relay);
+        Assert.Equal(0, refusals.Invitation);
+        Assert.Equal(1, harness.Server.Snapshot().RateRefusals);
+    }
+}

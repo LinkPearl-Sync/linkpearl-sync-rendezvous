@@ -78,6 +78,13 @@ public static class AdminPage
             margin-left: .2rem; vertical-align: .22em;
           }
           .carte span { color: var(--doux); font-size: .8rem; }
+          .refus .carte b { font-size: 1.2rem; }
+          .refus .carte b.non-nul { color: var(--alerte); }
+          .boucles { display: grid; grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr)); }
+          .boucles > * + * { border-top: none; }
+          .boucle { display: flex; align-items: center; gap: .6rem; padding: .7rem 1rem; font-size: .9rem; }
+          .boucle .doux { margin-left: auto; text-align: right; }
+          @media (min-width: 640px) { .boucles > * + * { border-left: 1px solid var(--bord); } }
           .courbe { margin-top: .8rem; }
           .courbe svg { width: 100%; height: 56px; display: block; }
           .courbe .attente { display: flex; align-items: center; justify-content: center; height: 56px; }
@@ -133,6 +140,21 @@ public static class AdminPage
 
         <main>
           <h2>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/><circle cx="12" cy="12" r="5"/></svg>
+            État <span class="compte" id="sante"></span>
+          </h2>
+          <div class="chiffres">
+            <div class="carte"><b id="connexions">0</b><span>connexions tenues</span></div>
+            <div class="carte"><b id="relaisActifs">0</b><span>relais en cours</span></div>
+            <div class="carte"><b id="invitations">0</b><span>invitations en attente</span></div>
+            <div class="carte"><b id="memoire">0</b><span>ensemble de travail, <span id="tas">0</span> de tas géré</span></div>
+          </div>
+          <div class="panneau boucles" style="margin-top:.8rem">
+            <div class="boucle"><span class="voyant" id="voyantAccept"></span><span>Acceptation TCP</span><span class="doux" id="etatAccept"></span></div>
+            <div class="boucle"><span class="voyant" id="voyantReflect"></span><span>Réflexion UDP</span><span class="doux" id="etatReflect"></span></div>
+          </div>
+
+          <h2>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg>
             Trafic
           </h2>
@@ -141,6 +163,13 @@ public static class AdminPage
             <div class="carte"><b id="attente">0</b><span>annonces en attente</span></div>
             <div class="carte"><b id="appariements">0</b><span>appariements</span></div>
             <div class="carte"><b id="relaye">0</b><span>relayés depuis le démarrage</span></div>
+          </div>
+          <div class="chiffres refus" style="margin-top:.8rem">
+            <div class="carte"><b id="refusAnnonce">0</b><span>annonces refusées</span></div>
+            <div class="carte"><b id="refusBoite">0</b><span>boîtes refusées</span></div>
+            <div class="carte"><b id="refusRelais">0</b><span>relais refusés</span></div>
+            <div class="carte"><b id="refusInvitation">0</b><span>invitations refusées</span></div>
+            <div class="carte"><b id="refusConnexion">0</b><span>connexions refusées</span></div>
           </div>
           <div class="panneau courbe">
             <div>
@@ -252,6 +281,24 @@ public static class AdminPage
           return [n.toFixed(i ? 1 : 0), u[i]];
         }
 
+        function grandeur(cible, n) {
+          const [quantite, unite] = octets(n);
+          cible.replaceChildren(document.createTextNode(quantite), Object.assign(document.createElement("em"), { textContent: unite }));
+        }
+
+        function ilYA(secondes) {
+          const ecart = Math.max(0, Math.floor(Date.now() / 1000 - secondes));
+          if (ecart < 60) return "à l'instant";
+          if (ecart < 3600) return "il y a " + Math.floor(ecart / 60) + " min";
+          return "il y a " + duree(ecart);
+        }
+
+        function boucle(nom, etat) {
+          $("voyant" + nom).classList.toggle("perdu", !etat.alive);
+          $("etat" + nom).textContent = (etat.alive ? "vivante" : "morte")
+            + (etat.lastTurn ? ", dernier tour " + ilYA(etat.lastTurn) : ", jamais servi");
+        }
+
         function depuis(secondes) {
           const jours = Math.floor((Date.now() / 1000 - secondes) / 86400);
           const date = new Date(secondes * 1000).toLocaleDateString("fr-CH");
@@ -336,20 +383,38 @@ public static class AdminPage
             return;
           }
 
-          $("voyant").classList.remove("perdu");
-          $("entete").textContent = "version " + s.version + ", port " + s.port + ", debout depuis " + duree(s.uptimeSeconds);
-          $("boites").textContent = s.openMailboxes;
-          $("attente").textContent = s.pendingAnnouncements;
-          $("appariements").textContent = s.matches;
-          const [quantite, unite] = octets(s.relayedBytes);
-          $("relaye").replaceChildren(document.createTextNode(quantite), Object.assign(document.createElement("em"), { textContent: unite }));
+          const c = s.counters, h = s.health, sain = h.healthy;
+          $("voyant").classList.toggle("perdu", !sain);
+          $("entete").textContent = "version " + s.version + ", port " + s.port + ", debout depuis " + duree(s.uptimeSeconds)
+            + (sain ? "" : ", une boucle est morte");
+          $("sante").textContent = sain ? "les deux boucles tournent" : "à redémarrer";
+          boucle("Accept", h.accept);
+          boucle("Reflect", h.reflect);
+
+          $("connexions").textContent = c.connections;
+          $("relaisActifs").textContent = c.activeRelays;
+          $("invitations").textContent = c.pendingInvitations;
+          grandeur($("memoire"), s.memory.workingSetBytes);
+          $("tas").textContent = octets(s.memory.gcHeapBytes).join(" ");
+
+          $("boites").textContent = c.openMailboxes;
+          $("attente").textContent = c.pendingAnnouncements;
+          $("appariements").textContent = c.matches;
+          grandeur($("relaye"), c.relayedBytes);
+
+          const r = s.refusals;
+          for (const [id, n] of [["refusAnnonce", r.announce], ["refusBoite", r.mailbox], ["refusRelais", r.relay],
+                                 ["refusInvitation", r.invitation], ["refusConnexion", r.connection]]) {
+            $(id).textContent = n;
+            $(id).classList.toggle("non-nul", n > 0);
+          }
 
           $("compteAnnuaire").textContent =
             s.known.length + (s.known.length > 1 ? " services connus" : " service connu")
             + (s.pending.length ? ", " + s.pending.length + " en attente" : "");
           $("compteBans").textContent = s.bans.length + (s.bans.length > 1 ? " entrées" : " entrée");
 
-          histoire.push(s.openMailboxes);
+          histoire.push(c.openMailboxes);
           if (histoire.length > 36) histoire.shift();
           courbe($("sparkBoites"), histoire);
           $("creteBoites").textContent = Math.max(0, ...histoire) + " au plus";
