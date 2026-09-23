@@ -82,9 +82,14 @@ public sealed class RendezvousServer(int requestedPort, PeerDirectory directory,
         lock (_invitationGate)
             invitations = _invitations.Count;
 
+        int mailboxes;
+
+        lock (_mailboxGate)
+            mailboxes = _mailboxes.Count;
+
         return new(
-            _mailboxes.Count, _waiting.Count, _relayWaiting.Count, invitations,
-            Matched, PeerSession.TotalRelayedBytes,
+            mailboxes, _waiting.Count, _relayWaiting.Count, invitations,
+            Interlocked.Read(ref _matched), PeerSession.TotalRelayedBytes,
             Volatile.Read(ref _connections), Interlocked.Read(ref _refusedConnections),
             Interlocked.Read(ref _rateRefusals), _rate.Count,
             directory.Known().Count, directory.Pending().Count);
@@ -135,7 +140,7 @@ public sealed class RendezvousServer(int requestedPort, PeerDirectory directory,
     private static readonly TimeSpan RateWindow = TimeSpan.FromMinutes(1);
 
     /// <summary>
-    /// Les boîtes ouvertes, et la session qui les tient.
+    /// Les boîtes ouvertes, et les sessions qui les tiennent.
     /// </summary>
     /// <remarks>
     /// Une adresse de boîte dérive du nom de personnage, donc ce registre dit de
@@ -143,11 +148,24 @@ public sealed class RendezvousServer(int requestedPort, PeerDirectory directory,
     /// inconnu ne peut pas reconnaître quelqu'un sans que le serveur le puisse
     /// aussi. Rien n'est persisté, et l'adresse tourne toutes les trente
     /// minutes, ce qui empêche de relier deux périodes.
+    ///
+    /// Plusieurs sessions par boîte : deux clients sur la même machine, ou une
+    /// reconnexion dont l'ancienne session n'est pas encore tombée. Une seule
+    /// session par boîte faisait que la seconde ouverture écrasait la
+    /// première, qui ne recevait plus rien sans le savoir, et que le départ de
+    /// l'une fermait la boîte de l'autre.
     /// </remarks>
-    private readonly ConcurrentDictionary<string, PeerSession> _mailboxes = new(StringComparer.Ordinal);
+    private readonly Lock _mailboxGate = new();
+    private readonly Dictionary<string, HashSet<PeerSession>> _mailboxes = new(StringComparer.Ordinal);
 
-    public long Matched { get; private set; }
-    public long Relayed { get; private set; }
+    // Incrémentés depuis la boucle de service de n'importe quelle session :
+    // un « ++ » y perdrait des unités.
+    private long _matched;
+    private long _relayed;
+
+    public long Matched => Interlocked.Read(ref _matched);
+
+    public long Relayed => Interlocked.Read(ref _relayed);
 
     public async Task RunAsync(CancellationToken ct)
     {
@@ -223,34 +241,36 @@ public sealed class RendezvousServer(int requestedPort, PeerDirectory directory,
     {
         while (ct.IsCancellationRequested is false)
         {
-            UdpReceiveResult received;
-
             try
             {
-                received = await reflection.ReceiveAsync(ct).ConfigureAwait(false);
+                var received = await reflection.ReceiveAsync(ct).ConfigureAwait(false);
+
+                if (received.Buffer.Length == 0 || received.Buffer[0] != RendezvousKind.Reflect)
+                    continue;
+
+                var from = Normalize(received.RemoteEndPoint);
+                var address = from.Address.GetAddressBytes();
+
+                var reply = new byte[2 + address.Length + 2];
+                reply[0] = RendezvousKind.Reflected;
+                reply[1] = (byte)address.Length;
+                address.CopyTo(reply.AsSpan(2));
+                BinaryPrimitives.WriteUInt16BigEndian(reply.AsSpan(2 + address.Length), (ushort)from.Port);
+
+                // L'envoi est dans le même filet que la réception : une
+                // destination injoignable fait lever l'envoi sur certaines
+                // plateformes, et une seule exception tuait la réflexion pour
+                // toujours, sans que le service paraisse mort.
+                await reflection.SendAsync(reply, received.RemoteEndPoint, ct).ConfigureAwait(false);
             }
-            catch (Exception) when (ct.IsCancellationRequested is false)
-            {
-                continue;
-            }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
                 return;
             }
-
-            if (received.Buffer.Length == 0 || received.Buffer[0] != RendezvousKind.Reflect)
-                continue;
-
-            var from = Normalize(received.RemoteEndPoint);
-            var address = from.Address.GetAddressBytes();
-
-            var reply = new byte[2 + address.Length + 2];
-            reply[0] = RendezvousKind.Reflected;
-            reply[1] = (byte)address.Length;
-            address.CopyTo(reply.AsSpan(2));
-            BinaryPrimitives.WriteUInt16BigEndian(reply.AsSpan(2 + address.Length), (ushort)from.Port);
-
-            await reflection.SendAsync(reply, received.RemoteEndPoint, ct).ConfigureAwait(false);
+            catch (Exception)
+            {
+                // Datagramme illisible ou destination injoignable : au suivant.
+            }
         }
     }
 
@@ -453,16 +473,28 @@ public sealed class RendezvousServer(int requestedPort, PeerDirectory directory,
         {
             // Un pair déjà en attente sur ce jeton, et qui n'est pas nous : on
             // échange les blocs, sans jamais les lire.
-            if (_waiting.TryRemove(key, out var partner) && ReferenceEquals(partner.Session, session) is false)
+            if (_waiting.TryGetValue(key, out var partner)
+                && ReferenceEquals(partner.Session, session) is false
+                && _waiting.TryRemove(new KeyValuePair<string, Waiting>(key, partner)))
             {
-                Matched++;
-                session.Remember(key);
+                partner.Session.ForgetKey(key);
 
-                await partner.Session.SendAsync(RendezvousWire.Matched(announcement.SealedCandidates), ct).ConfigureAwait(false);
-                await session.SendAsync(RendezvousWire.Matched(partner.SealedCandidates), ct).ConfigureAwait(false);
+                // Le partenaire est peut-être parti entre son annonce et la
+                // nôtre : son échec ne doit pas couper notre session. On
+                // reprend alors l'attente à sa place, comme s'il n'avait jamais
+                // été là.
+                if (await partner.Session.TrySendAsync(RendezvousWire.Matched(announcement.SealedCandidates), ct).ConfigureAwait(false))
+                {
+                    Interlocked.Increment(ref _matched);
+                    await session.SendAsync(RendezvousWire.Matched(partner.SealedCandidates), ct).ConfigureAwait(false);
 
-                Console.WriteLine($"[{key[..8]}] appariés : {partner.Session.Address} et {session.Address}");
-                continue;
+                    Console.WriteLine($"[{key[..8]}] appariés : {partner.Session.Address} et {session.Address}");
+
+                    // Un seul appariement par annonce : ses jetons désignent
+                    // tous la même paire, et continuer ferait recevoir un
+                    // second Matched pour le même pair.
+                    return true;
+                }
             }
 
             _waiting[key] = new Waiting
@@ -500,16 +532,25 @@ public sealed class RendezvousServer(int requestedPort, PeerDirectory directory,
 
         var key = Convert.ToHexStringLower(frame.AsSpan(1));
 
-        if (_relayWaiting.TryRemove(key, out var partner) && ReferenceEquals(partner.Session, session) is false)
+        if (_relayWaiting.TryGetValue(key, out var partner)
+            && ReferenceEquals(partner.Session, session) is false
+            && _relayWaiting.TryRemove(new KeyValuePair<string, (PeerSession, DateTimeOffset)>(key, partner)))
         {
-            Relayed++;
-            Console.WriteLine($"[{key[..8]}] relais ouvert entre {partner.Session.Address} et {session.Address}");
+            partner.Session.ForgetKey(key);
 
-            await partner.Session.SendAsync(RendezvousWire.Simple(RendezvousKind.RelayReady), ct).ConfigureAwait(false);
-            await session.SendAsync(RendezvousWire.Simple(RendezvousKind.RelayReady), ct).ConfigureAwait(false);
+            if (await partner.Session.TrySendAsync(RendezvousWire.Simple(RendezvousKind.RelayReady), ct).ConfigureAwait(false))
+            {
+                Interlocked.Increment(ref _relayed);
+                Console.WriteLine($"[{key[..8]}] relais ouvert entre {partner.Session.Address} et {session.Address}");
 
-            await PeerSession.PipeAsync(partner.Session, session, ct).ConfigureAwait(false);
-            return true;
+                await session.SendAsync(RendezvousWire.Simple(RendezvousKind.RelayReady), ct).ConfigureAwait(false);
+                await PeerSession.PipeAsync(partner.Session, session, ct).ConfigureAwait(false);
+                return true;
+            }
+
+            // Le partenaire garé est mort sans qu'on l'ait vu : on le libère
+            // pour que sa boucle de service se termine, et on attend à sa place.
+            partner.Session.ReleaseFromRelay();
         }
 
         _relayWaiting[key] = (session, clock.UtcNow);
@@ -648,10 +689,16 @@ public sealed class RendezvousServer(int requestedPort, PeerDirectory directory,
             return false;
         }
 
-        foreach (var key in keys)
+        lock (_mailboxGate)
         {
-            _mailboxes[key] = session;
-            session.RememberMailbox(key);
+            foreach (var key in keys)
+            {
+                if (_mailboxes.TryGetValue(key, out var holders) is false)
+                    _mailboxes[key] = holders = new HashSet<PeerSession>(ReferenceEqualityComparer.Instance);
+
+                holders.Add(session);
+                session.RememberMailbox(key);
+            }
         }
 
         Console.WriteLine($"[boîtes] {addresses.Count} ouverte(s) par {session.Address}");
@@ -672,9 +719,14 @@ public sealed class RendezvousServer(int requestedPort, PeerDirectory directory,
             return false;
         }
 
-        var present = addresses
-            .Select(address => _mailboxes.ContainsKey(Convert.ToHexStringLower(address)))
-            .ToList();
+        List<bool> present;
+
+        lock (_mailboxGate)
+        {
+            present = addresses
+                .Select(address => _mailboxes.ContainsKey(Convert.ToHexStringLower(address)))
+                .ToList();
+        }
 
         await session.SendAsync(RendezvousWire.MailboxPresence(present), ct).ConfigureAwait(false);
         return true;
@@ -706,7 +758,12 @@ public sealed class RendezvousServer(int requestedPort, PeerDirectory directory,
 
         var key = Convert.ToHexStringLower(frame.AsSpan(1, RendezvousWire.MailboxAddressSize));
 
-        if (_mailboxes.TryGetValue(key, out var recipient) is false)
+        PeerSession[] recipients;
+
+        lock (_mailboxGate)
+            recipients = _mailboxes.TryGetValue(key, out var holders) ? [.. holders] : [];
+
+        if (recipients.Length is 0)
         {
             await session.SendAsync(RendezvousWire.Error("destinataire absent"), ct).ConfigureAwait(false);
             return true;
@@ -714,9 +771,12 @@ public sealed class RendezvousServer(int requestedPort, PeerDirectory directory,
 
         Console.WriteLine($"[boîte {key[..8]}] demande remise, de {session.Address}");
 
-        await recipient.SendAsync(
-            RendezvousWire.MailboxDelivery(frame.AsSpan(1 + RendezvousWire.MailboxAddressSize)), ct)
-            .ConfigureAwait(false);
+        var delivery = RendezvousWire.MailboxDelivery(frame.AsSpan(1 + RendezvousWire.MailboxAddressSize));
+
+        // À chacune des sessions qui tiennent la boîte, et l'échec de l'une
+        // ne prive ni les autres ni celui qui dépose.
+        foreach (var recipient in recipients)
+            await recipient.TrySendAsync(delivery, ct).ConfigureAwait(false);
 
         return true;
     }
@@ -740,9 +800,12 @@ public sealed class RendezvousServer(int requestedPort, PeerDirectory directory,
 
     private void Forget(PeerSession session)
     {
+        // Par paire clé et objet, jamais par clé seule : une autre session peut
+        // attendre sur le même jeton depuis, et son attente ne nous appartient pas.
         foreach (var key in session.Keys)
         {
-            _waiting.TryRemove(new KeyValuePair<string, Waiting>(key, _waiting.GetValueOrDefault(key)!));
+            if (_waiting.TryGetValue(key, out var waiting) && ReferenceEquals(waiting.Session, session))
+                _waiting.TryRemove(new KeyValuePair<string, Waiting>(key, waiting));
 
             if (_relayWaiting.TryGetValue(key, out var relay) && ReferenceEquals(relay.Session, session))
                 _relayWaiting.TryRemove(new KeyValuePair<string, (PeerSession, DateTimeOffset)>(key, relay));
@@ -750,8 +813,16 @@ public sealed class RendezvousServer(int requestedPort, PeerDirectory directory,
 
         // Une boîte n'existe que tant que sa connexion tient : une déconnexion
         // vaut déclaration d'absence, sans délai ni battement de cœur à gérer.
-        foreach (var key in session.Mailboxes)
-            _mailboxes.TryRemove(new KeyValuePair<string, PeerSession>(key, session));
+        // Seule la session partante est retirée ; la boîte reste ouverte tant
+        // qu'une autre la tient.
+        lock (_mailboxGate)
+        {
+            foreach (var key in session.Mailboxes)
+            {
+                if (_mailboxes.TryGetValue(key, out var holders) && holders.Remove(session) && holders.Count is 0)
+                    _mailboxes.Remove(key);
+            }
+        }
     }
 
     /// <summary>

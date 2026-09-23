@@ -342,3 +342,142 @@ public sealed class LimiterTests
         Assert.Equal(0, harness.Server.Snapshot().TrackedAddresses);
     }
 }
+
+/// <summary>Ce qui se passe quand plusieurs sessions se croisent sur une même clé.</summary>
+public sealed class SharedKeyTests
+{
+    private static readonly TimeSpan Short = TimeSpan.FromMilliseconds(400);
+
+    private static byte[] Ticket(byte seed) => Enumerable.Repeat(seed, RendezvousTicket.SizeInBytes).ToArray();
+
+    private static byte[] Box(byte seed) => Enumerable.Repeat(seed, RendezvousWire.MailboxAddressSize).ToArray();
+
+    private static byte[] Announce(byte[] sealedCandidates, params byte[][] tickets)
+        => RendezvousWire.Announce(new Announcement(tickets, sealedCandidates));
+
+    /// <summary>Attend que le service ait constaté le départ d'une connexion.</summary>
+    private static async Task WaitForConnectionsAsync(ServerHarness harness, int expected)
+    {
+        for (var i = 0; i < 100 && harness.Server.Snapshot().Connections != expected; i++)
+            await Task.Delay(20);
+
+        Assert.Equal(expected, harness.Server.Snapshot().Connections);
+    }
+
+    [Fact]
+    public async Task Partir_ne_retire_pas_lattente_dun_autre_sur_le_meme_jeton()
+    {
+        // A et B se sont appariés sur T. C attend ensuite sur T. Le départ de A
+        // retirait l'attente de C, et D ne trouvait plus personne.
+        await using var harness = await ServerHarness.StartAsync();
+
+        var a = await harness.ConnectAsync();
+        var b = await harness.ConnectAsync();
+        await a.SendAsync(Announce([1], Ticket(0x11)));
+        Assert.True(await a.IsSilentAsync(Short));
+        await b.SendAsync(Announce([2], Ticket(0x11)));
+        Assert.Equal(RendezvousKind.Matched, (await a.ReadFrameAsync())![0]);
+        Assert.Equal(RendezvousKind.Matched, (await b.ReadFrameAsync())![0]);
+
+        var c = await harness.ConnectAsync();
+        await c.SendAsync(Announce([3], Ticket(0x11)));
+        Assert.True(await c.IsSilentAsync(Short));
+
+        a.Dispose();
+        await WaitForConnectionsAsync(harness, 2);
+        Assert.Equal(1, harness.Server.Snapshot().PendingAnnouncements);
+
+        var d = await harness.ConnectAsync();
+        await d.SendAsync(Announce([4], Ticket(0x11)));
+
+        Assert.Equal(new byte[] { 4 }, (await c.ReadFrameAsync())![1..]);
+        Assert.Equal(new byte[] { 3 }, (await d.ReadFrameAsync())![1..]);
+    }
+
+    [Fact]
+    public async Task Un_appariement_ne_se_produit_quune_fois_par_annonce()
+    {
+        // Les deux jetons d'une annonce désignent la même paire : les apparier
+        // tous les deux faisait recevoir deux Matched et compter deux fois.
+        await using var harness = await ServerHarness.StartAsync();
+
+        var a = await harness.ConnectAsync();
+        var b = await harness.ConnectAsync();
+        await a.SendAsync(Announce([1], Ticket(0x11), Ticket(0x12)));
+        Assert.True(await a.IsSilentAsync(Short));
+        await b.SendAsync(Announce([2], Ticket(0x11), Ticket(0x12)));
+
+        Assert.Equal(RendezvousKind.Matched, (await a.ReadFrameAsync())![0]);
+        Assert.Equal(RendezvousKind.Matched, (await b.ReadFrameAsync())![0]);
+        Assert.True(await a.IsSilentAsync(Short));
+        Assert.True(await b.IsSilentAsync(Short));
+        Assert.Equal(1, harness.Server.Snapshot().Matches);
+    }
+
+    [Fact]
+    public async Task Une_boite_ouverte_par_deux_sessions_sert_les_deux()
+    {
+        // Deux clients sur la même machine, ou une reconnexion dont l'ancienne
+        // session n'est pas encore tombée : la seconde ouverture écrasait la
+        // première, qui ne recevait plus rien sans le savoir.
+        await using var harness = await ServerHarness.StartAsync();
+
+        var first = await harness.ConnectAsync();
+        var second = await harness.ConnectAsync();
+        await first.SendAsync(RendezvousWire.MailboxOpen([Box(1)]));
+        await second.SendAsync(RendezvousWire.MailboxOpen([Box(1)]));
+        Assert.True(await second.IsSilentAsync(Short));
+
+        var sender = await harness.ConnectAsync();
+        await sender.SendAsync(RendezvousWire.MailboxDeposit(Box(1), [7, 7]));
+
+        Assert.Equal(new byte[] { 7, 7 }, (await first.ReadFrameAsync())![1..]);
+        Assert.Equal(new byte[] { 7, 7 }, (await second.ReadFrameAsync())![1..]);
+        Assert.Equal(1, harness.Server.Snapshot().OpenMailboxes);
+    }
+
+    [Fact]
+    public async Task Une_boite_partagee_survit_au_depart_dune_des_sessions()
+    {
+        await using var harness = await ServerHarness.StartAsync();
+
+        var first = await harness.ConnectAsync();
+        var second = await harness.ConnectAsync();
+        await first.SendAsync(RendezvousWire.MailboxOpen([Box(1)]));
+        await second.SendAsync(RendezvousWire.MailboxOpen([Box(1)]));
+        Assert.True(await second.IsSilentAsync(Short));
+
+        second.Dispose();
+        await WaitForConnectionsAsync(harness, 1);
+        Assert.Equal(1, harness.Server.Snapshot().OpenMailboxes);
+
+        var sender = await harness.ConnectAsync();
+        await sender.SendAsync(RendezvousWire.MailboxDeposit(Box(1), [7]));
+
+        Assert.Equal(new byte[] { 7 }, (await first.ReadFrameAsync())![1..]);
+
+        first.Dispose();
+        await WaitForConnectionsAsync(harness, 1);
+        Assert.Equal(0, harness.Server.Snapshot().OpenMailboxes);
+    }
+
+    [Fact]
+    public async Task Deux_demandes_de_relais_sont_pontees()
+    {
+        await using var harness = await ServerHarness.StartAsync();
+
+        var a = await harness.ConnectAsync();
+        var b = await harness.ConnectAsync();
+        await a.SendAsync(RendezvousWire.RelayOpen(Ticket(0x11)));
+        Assert.True(await a.IsSilentAsync(Short));
+        await b.SendAsync(RendezvousWire.RelayOpen(Ticket(0x11)));
+
+        Assert.Equal(RendezvousKind.RelayReady, (await a.ReadFrameAsync())![0]);
+        Assert.Equal(RendezvousKind.RelayReady, (await b.ReadFrameAsync())![0]);
+
+        await a.SendAsync(RendezvousWire.RelayData([9, 9, 9]));
+
+        Assert.Equal(new byte[] { 9, 9, 9 }, (await b.ReadFrameAsync())![1..]);
+        Assert.Equal(0, harness.Server.Snapshot().RelayWaiting);
+    }
+}
