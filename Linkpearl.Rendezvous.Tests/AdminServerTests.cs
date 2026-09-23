@@ -66,12 +66,69 @@ public sealed class AdminServerTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task La_page_souvre_sans_jeton()
+    public async Task La_page_elle_meme_exige_le_jeton()
     {
-        var response = await _client.GetAsync($"{_root}/");
+        var request = new HttpRequestMessage(HttpMethod.Get, $"{_root}/");
+        request.Headers.Add("Sec-Fetch-Mode", "navigate");
+
+        var response = await _client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+
+        // Sans cet en-tête, le navigateur montre une page d'erreur au lieu de
+        // demander le mot de passe, et la console devient inatteignable.
+        Assert.Contains("Basic", response.Headers.WwwAuthenticate.ToString());
+    }
+
+    [Fact]
+    public async Task Un_appel_json_refuse_ne_declenche_pas_la_boite_de_dialogue()
+    {
+        // Avec un défi, le navigateur l'ouvrirait au milieu d'un
+        // rafraîchissement automatique, sans que personne ne l'ait demandé.
+        var request = new HttpRequestMessage(HttpMethod.Get, $"{_root}/api/status");
+        request.Headers.Add("Sec-Fetch-Mode", "cors");
+
+        var response = await _client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        Assert.Empty(response.Headers.WwwAuthenticate);
+    }
+
+    [Fact]
+    public async Task La_page_souvre_avec_le_jeton()
+    {
+        var response = await SendAsync(HttpMethod.Get, "/");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        Assert.Contains("Service de rendez-vous Linkpearl", await response.Content.ReadAsStringAsync());
+        Assert.Contains("service de rendez-vous", await response.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task Le_navigateur_est_accepte_en_authentification_basique()
+    {
+        // C'est ce que renvoie un navigateur après sa boîte de dialogue :
+        // l'identifiant ne compte pas, il n'y a qu'un secret.
+        var pair = Convert.ToBase64String(Encoding.UTF8.GetBytes($"peu importe:{_token}"));
+
+        var request = new HttpRequestMessage(HttpMethod.Get, $"{_root}/api/status")
+        {
+            Headers = { Authorization = new AuthenticationHeaderValue("Basic", pair) },
+        };
+
+        Assert.Equal(HttpStatusCode.OK, (await _client.SendAsync(request)).StatusCode);
+    }
+
+    [Fact]
+    public async Task Une_authentification_basique_fautive_est_refusee()
+    {
+        var pair = Convert.ToBase64String(Encoding.UTF8.GetBytes("admin:mauvais"));
+
+        var request = new HttpRequestMessage(HttpMethod.Get, $"{_root}/api/status")
+        {
+            Headers = { Authorization = new AuthenticationHeaderValue("Basic", pair) },
+        };
+
+        Assert.Equal(HttpStatusCode.Unauthorized, (await _client.SendAsync(request)).StatusCode);
     }
 
     [Fact]
@@ -198,7 +255,7 @@ public sealed class AdminServerTests : IAsyncLifetime
         // et rendait 404 à tout proxy, et même à « localhost ».
         foreach (var host in new[] { "linkpearl.exemple.ch", "localhost", "127.0.0.1" })
         {
-            var request = new HttpRequestMessage(HttpMethod.Get, $"{_root}/");
+            var request = new HttpRequestMessage(HttpMethod.Get, $"{_root}/api/bans");
             request.Headers.Host = host;
 
             var response = await _client.SendAsync(request);

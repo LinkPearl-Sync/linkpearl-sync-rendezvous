@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net;
 using System.Reflection;
 using System.Text;
@@ -35,6 +36,13 @@ public sealed class AdminServer(
     private static readonly string Version =
         (typeof(AdminServer).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
          ?? "inconnue").Split('+')[0];
+
+    private const int FailuresBeforeSlowing = 5;
+
+    private static readonly TimeSpan FailureWindow = TimeSpan.FromMinutes(5);
+
+    private readonly ConcurrentDictionary<string, (int Failures, DateTime Since)> _failures =
+        new(StringComparer.Ordinal);
 
     private readonly DateTime _started = DateTime.UtcNow;
 
@@ -106,16 +114,30 @@ public sealed class AdminServer(
         var path = context.Request.Url?.AbsolutePath ?? "/";
         var method = context.Request.HttpMethod;
 
-        // Seuls la page et la liste sont publiques. La liste l'est à dessein :
-        // c'est ce que les clients téléchargent, et elle ne porte que des
-        // empreintes lentes, inexploitables sans le nom.
-        var open = path is "/" && method is "GET" || path is "/api/bans" && method is "GET";
+        // Une seule chose est publique, et à dessein : la liste de
+        // bannissement, que les clients téléchargent. Elle ne porte que des
+        // empreintes lentes, inexploitables sans le nom. Tout le reste, la page
+        // comprise, demande le jeton : une console qui s'affiche à qui la
+        // demande annonce au monde ce qui tourne ici, et invite à essayer.
+        var open = path is "/api/bans" && method is "GET";
 
         if (open is false && AdminToken.Matches(token, context.Request.Headers["Authorization"]) is false)
         {
+            await SlowDownAsync(context).ConfigureAwait(false);
+
+            // Sans cet en-tête, le navigateur affiche une page d'erreur au lieu
+            // de demander le mot de passe, et la console devient inatteignable
+            // autrement qu'en ligne de commande. Avec, sur un appel JSON, il
+            // ouvrirait sa boîte de dialogue au milieu d'un rafraîchissement :
+            // on ne le pose donc que sur une navigation.
+            if (IsNavigation(context.Request))
+                context.Response.AddHeader("WWW-Authenticate", "Basic realm=\"Linkpearl\", charset=\"UTF-8\"");
+
             Respond(context, 401, "application/json", """{"error":"jeton absent ou invalide"}""");
             return;
         }
+
+        _failures.TryRemove(Origin(context), out _);
 
         switch (path, method)
         {
@@ -240,6 +262,47 @@ public sealed class AdminServer(
 
         return document.ToJsonString();
     }
+
+    /// <summary>Si cette requête est une page demandée par un navigateur.</summary>
+    /// <remarks>
+    /// Sec-Fetch-Mode le dit sans ambiguïté sur les navigateurs récents, et
+    /// l'en-tête Accept sert de repli pour les autres. Une requête en ligne de
+    /// commande n'est ni l'un ni l'autre, et n'a que faire d'un défi.
+    /// </remarks>
+    private static bool IsNavigation(HttpListenerRequest request)
+        => request.Headers["Sec-Fetch-Mode"] is "navigate"
+           || request.Headers["Sec-Fetch-Mode"] is null
+              && request.Headers["Accept"]?.Contains("text/html", StringComparison.Ordinal) is true;
+
+    /// <summary>
+    /// Fait attendre celui qui enchaîne les essais ratés.
+    /// </summary>
+    /// <remarks>
+    /// Un jeton de trente-deux octets ne se devine pas, donc ce délai ne protège
+    /// pas le secret : il évite qu'un proxy mal réglé ou un robot ne remplisse
+    /// le journal et ne consomme la machine à raison de mille essais par
+    /// seconde. Il croît avec les échecs et s'efface au premier succès.
+    /// </remarks>
+    private async Task SlowDownAsync(HttpListenerContext context)
+    {
+        var origin = Origin(context);
+        var now = DateTime.UtcNow;
+
+        var state = _failures.AddOrUpdate(
+            origin,
+            _ => (1, now),
+            (_, previous) => now - previous.Since > FailureWindow ? (1, now) : (previous.Failures + 1, previous.Since));
+
+        if (state.Failures <= FailuresBeforeSlowing)
+            return;
+
+        var penalty = Math.Min(state.Failures - FailuresBeforeSlowing, 10) * 500;
+
+        await Task.Delay(penalty).ConfigureAwait(false);
+    }
+
+    private static string Origin(HttpListenerContext context)
+        => context.Request.RemoteEndPoint?.Address.ToString() ?? "inconnu";
 
     /// <summary>Si cette adresse a droit à une réponse.</summary>
     /// <remarks>

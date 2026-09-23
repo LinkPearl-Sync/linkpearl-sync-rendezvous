@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Text;
 
 namespace Linkpearl.Rendezvous;
 
@@ -43,20 +44,53 @@ public static class AdminToken
     }
 
     /// <summary>
-    /// Vrai si l'en-tête présente ce jeton.
+    /// Vrai si l'en-tête présente ce jeton, en « Bearer » ou en « Basic ».
     /// </summary>
     /// <remarks>
-    /// Comparaison à temps constant : la console est joignable depuis la boucle
-    /// locale, donc par tout processus de la machine, et un test qui s'arrête au
-    /// premier caractère faux se devine octet par octet.
+    /// Les deux formes portent la même chose. « Bearer » sert aux appels en
+    /// ligne de commande. « Basic » sert au navigateur : c'est lui qui permet de
+    /// protéger la page elle-même, puisque le navigateur demande le mot de passe
+    /// avant de l'afficher et le renvoie ensuite tout seul. Un champ dans la
+    /// page ne peut pas faire cela : il suppose la page déjà servie.
+    ///
+    /// L'identifiant n'est pas regardé : il n'y a qu'un secret, et exiger en
+    /// plus un nom donnerait l'illusion de deux.
+    ///
+    /// Comparaison à temps constant : un test qui s'arrête au premier caractère
+    /// faux se devine octet par octet.
     /// </remarks>
     public static bool Matches(string expected, string? authorization)
     {
-        if (authorization is null || authorization.StartsWith("Bearer ", StringComparison.Ordinal) is false)
+        if (authorization is null)
+            return false;
+
+        var presented = Presented(authorization);
+
+        if (presented is null)
             return false;
 
         return CryptographicOperations.FixedTimeEquals(
-            System.Text.Encoding.UTF8.GetBytes(authorization["Bearer ".Length..].Trim()),
-            System.Text.Encoding.UTF8.GetBytes(expected));
+            Encoding.UTF8.GetBytes(presented), Encoding.UTF8.GetBytes(expected));
+    }
+
+    private static string? Presented(string authorization)
+    {
+        if (authorization.StartsWith("Bearer ", StringComparison.Ordinal))
+            return authorization["Bearer ".Length..].Trim();
+
+        if (authorization.StartsWith("Basic ", StringComparison.Ordinal) is false)
+            return null;
+
+        try
+        {
+            var pair = Encoding.UTF8.GetString(Convert.FromBase64String(authorization["Basic ".Length..].Trim()));
+            var cut = pair.IndexOf(':', StringComparison.Ordinal);
+
+            return cut < 0 ? null : pair[(cut + 1)..];
+        }
+        catch (FormatException)
+        {
+            return null;
+        }
     }
 }

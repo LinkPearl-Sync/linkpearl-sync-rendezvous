@@ -44,8 +44,15 @@ lprdv --port 47900 --no-admin                  # pas de console du tout
 ```
 
 Au premier démarrage, le service écrit un jeton aléatoire dans `admin.token` et le
-journalise une fois. C'est lui que la page demande. Le perdre se répare en supprimant le
-fichier.
+journalise une fois. Le navigateur le demande avant d'afficher quoi que ce soit, dans sa
+propre boîte de dialogue : n'importe quel identifiant, et le jeton comme mot de passe. Il le
+renvoie ensuite tout seul, donc la page n'a ni champ à remplir ni secret à stocker. Le perdre
+se répare en supprimant le fichier.
+
+**La page elle-même demande le jeton**, et pas seulement les données qu'elle affiche : une
+console qui s'ouvre à qui la demande annonce ce qui tourne ici et invite à essayer. Un jeton
+de trente-deux octets ne se devine pas, mais les essais répétés depuis une même adresse sont
+freinés, pour qu'un robot ne remplisse pas le journal.
 
 **La console est en HTTP clair, et ne sert que la machine locale.** Pour l'ouvrir depuis
 l'extérieur, mettre un proxy inverse avec TLS sur la même machine, pas `--admin-allow any` :
@@ -103,8 +110,9 @@ Trois limites, écrites plutôt que laissées à croire résolues :
   autre dépôt. Le prix est que PBKDF2 se calcule bien sur processeur graphique, là où argon2
   y résisterait par sa consommation mémoire.
 
-`GET /api/bans` est public à dessein : c'est ce que les clients téléchargent. Tout le reste
-exige l'en-tête `Authorization: Bearer <jeton>`.
+`GET /api/bans` est la seule chose publique, et à dessein : c'est ce que les clients
+téléchargent. Tout le reste, la page comprise, exige le jeton, en `Authorization: Bearer
+<jeton>` pour la ligne de commande ou en authentification basique pour le navigateur.
 
 | Méthode et chemin | Effet |
 |---|---|

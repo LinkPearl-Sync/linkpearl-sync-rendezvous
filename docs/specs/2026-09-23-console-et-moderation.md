@@ -131,6 +131,14 @@ propriété du système, pas une précaution d'affichage.
 
 Tout sauf `GET /` et `GET /api/bans` exige l'en-tête `Authorization: Bearer <jeton>`.
 
+**Corrigé à la mise en œuvre.** `GET /` l'exige aussi, en authentification basique :
+une console qui s'affiche à qui la demande annonce ce qui tourne ici et invite à
+essayer, et le premier déploiement public l'a rendue visible de tous. Le navigateur
+demande alors le jeton avant d'afficher la page et le renvoie seul ensuite, ce qui a
+aussi supprimé le champ de saisie et le stockage du secret dans la page. Le défi
+n'accompagne que les navigations : sur un appel JSON, il ferait surgir la boîte de
+dialogue au milieu d'un rafraîchissement.
+
 `GET /api/bans` est public **à dessein** : c'est ce que les clients
 téléchargent. Il ne révèle que des empreintes lentes, inexploitables sans le nom.
 
