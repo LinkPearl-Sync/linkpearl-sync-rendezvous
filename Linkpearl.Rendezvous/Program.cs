@@ -35,6 +35,8 @@ if (args.Contains("--help"))
                 restrictifs, la charge utile étant de toute façon chiffrée de
                 bout en bout par les pairs eux-mêmes.
         --rate  annonces par minute et par adresse, au-delà desquelles on refuse.
+        --verbose  journal détaillé, adresses et fragments de jetons compris.
+                   Par défaut le journal ne dit que ce qui se passe, jamais à qui.
 
         --peers    fichier des services connus, une ligne « adresse  libellé »,
                    relu à chaud : ajouter un service est une ligne écrite, pas
@@ -54,8 +56,8 @@ if (args.Contains("--help"))
                       TLS sur la même machine, pas --admin-allow any.
                       Un proxy local passe, quel que soit le nom qu'il présente.
         --no-admin    n'ouvre pas de console du tout.
-        --admin-token fichier du jeton. Engendré au premier démarrage, et
-                      journalisé une fois : admin.token par défaut.
+        --admin-token fichier du jeton. Engendré au premier démarrage, à lire
+                      dans le fichier : admin.token par défaut.
         --bans        fichier de la liste de bannissement. bans.json par défaut.
         """);
     return;
@@ -105,7 +107,7 @@ foreach (var target in ArgAll("--announce-to"))
 }
 
 var limits = new RendezvousLimits { AnnouncementsPerMinute = rate };
-var service = new RendezvousServer(port, directory, limits, clock);
+var service = new RendezvousServer(port, directory, limits, clock, verbose: args.Contains("--verbose"));
 var bans = new BanStore(ArgString("--bans", "bans.json"));
 
 // La liste est chargée tout de suite, et non à la première requête : c'est ce

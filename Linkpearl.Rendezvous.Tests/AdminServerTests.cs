@@ -350,3 +350,27 @@ public sealed class AdminTokenTests : IDisposable
     public void Len_tete_attendu_est_accepte()
         => Assert.True(AdminToken.Matches("le-jeton", "Bearer le-jeton"));
 }
+
+/// <summary>Ce que le jeton laisse voir, sur le disque et dans le journal.</summary>
+public sealed class AdminTokenExposureTests : IDisposable
+{
+    private readonly string _dir = Path.Combine(Path.GetTempPath(), $"lprdv-token-{Guid.NewGuid():N}");
+
+    public AdminTokenExposureTests() => Directory.CreateDirectory(_dir);
+
+    public void Dispose() => Directory.Delete(_dir, recursive: true);
+
+    [Fact]
+    public void Le_journal_ne_porte_que_le_chemin_du_jeton()
+    {
+        // Un journal est relu par des yeux qui n'ont pas à ouvrir la console,
+        // et copié dans des rapports : le jeton se lit dans son fichier.
+        var path = Path.Combine(_dir, "admin.token");
+        var log = new StringWriter();
+
+        var token = AdminToken.LoadOrCreate(path, log);
+
+        Assert.Contains(path, log.ToString());
+        Assert.DoesNotContain(token, log.ToString());
+    }
+}

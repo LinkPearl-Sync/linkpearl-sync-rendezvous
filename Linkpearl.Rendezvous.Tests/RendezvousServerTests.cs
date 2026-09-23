@@ -481,3 +481,77 @@ public sealed class SharedKeyTests
         Assert.Equal(0, harness.Server.Snapshot().RelayWaiting);
     }
 }
+
+/// <summary>Ce que le journal dit, et surtout ce qu'il tait.</summary>
+public sealed class LogTests
+{
+    private static readonly TimeSpan Short = TimeSpan.FromMilliseconds(400);
+
+    private static byte[] Ticket(byte seed) => Enumerable.Repeat(seed, RendezvousTicket.SizeInBytes).ToArray();
+
+    private static byte[] Box(byte seed) => Enumerable.Repeat(seed, RendezvousWire.MailboxAddressSize).ToArray();
+
+    private static byte[] Invitation(byte seed) => Enumerable.Repeat(seed, RendezvousWire.InvitationTicketSize).ToArray();
+
+    private static byte[] Announce(byte[] sealedCandidates, params byte[][] tickets)
+        => RendezvousWire.Announce(new Announcement(tickets, sealedCandidates));
+
+    /// <summary>Fait passer un appariement, un dépôt d'invitation, une boîte et une remise.</summary>
+    private static async Task ExerciseAsync(ServerHarness harness)
+    {
+        var a = await harness.ConnectAsync();
+        var b = await harness.ConnectAsync();
+        await a.SendAsync(Announce([1], Ticket(0x11)));
+        Assert.True(await a.IsSilentAsync(Short));
+        await b.SendAsync(Announce([2], Ticket(0x11)));
+        Assert.Equal(RendezvousKind.Matched, (await a.ReadFrameAsync())![0]);
+        Assert.Equal(RendezvousKind.Matched, (await b.ReadFrameAsync())![0]);
+
+        await a.SendAsync(RendezvousWire.TicketRegister(Invitation(0x0a), [1]));
+        Assert.Equal(RendezvousKind.TicketAccepted, (await a.ReadFrameAsync())![0]);
+        await b.SendAsync(RendezvousWire.TicketRedeem(Invitation(0x0a)));
+        Assert.Equal(RendezvousKind.TicketPayload, (await b.ReadFrameAsync())![0]);
+
+        await a.SendAsync(RendezvousWire.MailboxOpen([Box(0x0b)]));
+
+        for (var i = 0; i < 100 && harness.Server.Snapshot().OpenMailboxes is 0; i++)
+            await Task.Delay(20);
+
+        await b.SendAsync(RendezvousWire.MailboxDeposit(Box(0x0b), [1]));
+        Assert.Equal(RendezvousKind.MailboxDelivery, (await a.ReadFrameAsync())![0]);
+    }
+
+    [Fact]
+    public async Task Par_defaut_le_journal_ne_porte_ni_adresse_ni_fragment()
+    {
+        // Un journal est un fichier qui reste : y écrire des adresses et des
+        // fragments de jetons ferait du service l'index qu'il promet de ne pas
+        // tenir.
+        await using var harness = await ServerHarness.StartAsync();
+
+        await ExerciseAsync(harness);
+
+        var log = harness.Log;
+
+        Assert.Contains("appari", log);
+        Assert.Contains("invitation", log);
+        Assert.DoesNotContain("127.0.0.1", log);
+        Assert.DoesNotContain("1111", log);
+        Assert.DoesNotContain("0a0a", log);
+        Assert.DoesNotContain("0b0b", log);
+    }
+
+    [Fact]
+    public async Task En_mode_verbeux_les_adresses_apparaissent_mais_jamais_le_ticket_dinvitation()
+    {
+        await using var harness = await ServerHarness.StartAsync(verbose: true);
+
+        await ExerciseAsync(harness);
+
+        var log = harness.Log;
+
+        Assert.Contains("127.0.0.1", log);
+        Assert.Contains("1111", log);
+        Assert.DoesNotContain("0a0a", log);
+    }
+}

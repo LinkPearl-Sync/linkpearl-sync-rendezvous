@@ -32,7 +32,24 @@ public sealed class ServerHarness : IAsyncDisposable
 
     public int Port { get; private set; }
 
-    public static async Task<ServerHarness> StartAsync(RendezvousLimits? limits = null)
+    // Synchronisé : les sessions écrivent depuis plusieurs fils. Le writer
+    // synchronisé verrouille sur lui-même, et la lecture prend ce même verrou.
+    private readonly StringWriter _sink = new();
+    private readonly TextWriter _log;
+
+    private ServerHarness() => _log = TextWriter.Synchronized(_sink);
+
+    /// <summary>Ce que le service a journalisé jusqu'ici.</summary>
+    public string Log
+    {
+        get
+        {
+            lock (_log)
+                return _sink.ToString();
+        }
+    }
+
+    public static async Task<ServerHarness> StartAsync(RendezvousLimits? limits = null, bool verbose = false)
     {
         var harness = new ServerHarness();
 
@@ -42,7 +59,10 @@ public sealed class ServerHarness : IAsyncDisposable
             Path.Combine(harness._dir, "peers.txt"), Path.Combine(harness._dir, "pending.txt"));
 
         harness.Server = new RendezvousServer(
-            0, harness.Directory, limits ?? RendezvousLimits.Default, harness.Clock);
+            0, harness.Directory, limits ?? RendezvousLimits.Default, harness.Clock, verbose)
+        {
+            Log = harness._log,
+        };
 
         harness._running = harness.Server.RunAsync(harness._stopping.Token);
         harness.Port = await harness.Server.Listening.WaitAsync(TimeSpan.FromSeconds(5));

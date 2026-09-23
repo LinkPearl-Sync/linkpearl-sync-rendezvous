@@ -30,9 +30,26 @@ namespace Linkpearl.Rendezvous;
 /// Aucun état n'est persisté. Redémarrer le service n'efface rien puisqu'il n'y
 /// a rien à effacer.
 /// </remarks>
-public sealed class RendezvousServer(int requestedPort, PeerDirectory directory, RendezvousLimits limits, IClock clock)
+public sealed class RendezvousServer(
+    int requestedPort, PeerDirectory directory, RendezvousLimits limits, IClock clock, bool verbose = false)
 {
     private RendezvousLimits _limits = limits;
+
+    /// <summary>Où le service écrit ce qu'il fait.</summary>
+    public TextWriter Log { get; init; } = Console.Out;
+
+    /// <summary>
+    /// Une ligne de journal, avec ou sans son détail.
+    /// </summary>
+    /// <remarks>
+    /// Par défaut, le journal dit ce qui se passe et jamais à qui : un journal
+    /// est un fichier qui reste, relu et copié, et y écrire des adresses et
+    /// des fragments de jetons ferait du service l'index qu'il promet de ne
+    /// pas tenir. Le mode verbeux rend le détail pour diagnostiquer une
+    /// soirée, et se coupe ensuite. Le ticket d'invitation n'apparaît dans
+    /// aucun des deux : c'est un secret qui se retire, pas un identifiant.
+    /// </remarks>
+    private void Note(string what, string detail) => Log.WriteLine(verbose ? $"{what} : {detail}" : what);
 
     /// <summary>
     /// Les plafonds en vigueur, remplaçables d'un bloc.
@@ -193,9 +210,11 @@ public sealed class RendezvousServer(int requestedPort, PeerDirectory directory,
             throw;
         }
 
-        Console.WriteLine($"Rendez-vous en écoute sur le port {Port}, TCP et UDP, IPv4 et IPv6.");
-        Console.WriteLine("Aucun état persisté, aucune base de données.");
-        Console.WriteLine();
+        Log.WriteLine($"Rendez-vous en écoute sur le port {Port}, TCP et UDP, IPv4 et IPv6.");
+        Log.WriteLine(verbose
+            ? "Journal détaillé : adresses et fragments de jetons inclus. À couper une fois le diagnostic fait."
+            : "Journal sans adresse ni fragment de jeton. --verbose pour le détail.");
+        Log.WriteLine();
 
         _listening.TrySetResult(Port);
 
@@ -218,7 +237,7 @@ public sealed class RendezvousServer(int requestedPort, PeerDirectory directory,
                     // avant d'être prise : une boucle qui mourrait ici laisserait
                     // le service sourd tout en paraissant vivant. On souffle, le
                     // temps qu'une session se termine, puis on reprend.
-                    Console.WriteLine($"Acceptation en échec ({e.GetType().Name}), reprise dans 100 ms.");
+                    Log.WriteLine($"Acceptation en échec ({e.GetType().Name}), reprise dans 100 ms.");
                     await Task.Delay(100, ct).ConfigureAwait(false);
                     continue;
                 }
@@ -412,7 +431,7 @@ public sealed class RendezvousServer(int requestedPort, PeerDirectory directory,
         {
             // Tout le reste est une faute du service, pas du client, et une
             // faute qu'on ne voit pas ne se corrige jamais.
-            Console.WriteLine($"Session en échec ({e.GetType().Name}) : {e.Message}");
+            Log.WriteLine($"Session en échec ({e.GetType().Name}) : {e.Message}");
         }
         finally
         {
@@ -488,7 +507,7 @@ public sealed class RendezvousServer(int requestedPort, PeerDirectory directory,
                     Interlocked.Increment(ref _matched);
                     await session.SendAsync(RendezvousWire.Matched(partner.SealedCandidates), ct).ConfigureAwait(false);
 
-                    Console.WriteLine($"[{key[..8]}] appariés : {partner.Session.Address} et {session.Address}");
+                    Note("appariement", $"[{key[..8]}] {partner.Session.Address} et {session.Address}");
 
                     // Un seul appariement par annonce : ses jetons désignent
                     // tous la même paire, et continuer ferait recevoir un
@@ -541,7 +560,7 @@ public sealed class RendezvousServer(int requestedPort, PeerDirectory directory,
             if (await partner.Session.TrySendAsync(RendezvousWire.Simple(RendezvousKind.RelayReady), ct).ConfigureAwait(false))
             {
                 Interlocked.Increment(ref _relayed);
-                Console.WriteLine($"[{key[..8]}] relais ouvert entre {partner.Session.Address} et {session.Address}");
+                Note("relais ouvert", $"[{key[..8]}] {partner.Session.Address} et {session.Address}");
 
                 await session.SendAsync(RendezvousWire.Simple(RendezvousKind.RelayReady), ct).ConfigureAwait(false);
                 await PeerSession.PipeAsync(partner.Session, session, ct).ConfigureAwait(false);
@@ -586,7 +605,7 @@ public sealed class RendezvousServer(int requestedPort, PeerDirectory directory,
             return true;
         }
 
-        Console.WriteLine($"[{key}] invitation déposée par {session.Address}");
+        Note("invitation déposée", $"par {session.Address}");
 
         await session.SendAsync(RendezvousWire.Simple(RendezvousKind.TicketAccepted), ct).ConfigureAwait(false);
         return true;
@@ -663,7 +682,7 @@ public sealed class RendezvousServer(int requestedPort, PeerDirectory directory,
             return true;
         }
 
-        Console.WriteLine($"[{key}] invitation retirée par {session.Address}");
+        Note("invitation retirée", $"par {session.Address}");
 
         await session.SendAsync(RendezvousWire.TicketPayload(invitation.Payload), ct).ConfigureAwait(false);
         return true;
@@ -701,7 +720,7 @@ public sealed class RendezvousServer(int requestedPort, PeerDirectory directory,
             }
         }
 
-        Console.WriteLine($"[boîtes] {addresses.Count} ouverte(s) par {session.Address}");
+        Note($"boîtes ouvertes ({keys.Count})", $"par {session.Address}");
         return true;
     }
 
@@ -769,7 +788,7 @@ public sealed class RendezvousServer(int requestedPort, PeerDirectory directory,
             return true;
         }
 
-        Console.WriteLine($"[boîte {key[..8]}] demande remise, de {session.Address}");
+        Note("demande remise", $"[boîte {key[..8]}] de {session.Address}");
 
         var delivery = RendezvousWire.MailboxDelivery(frame.AsSpan(1 + RendezvousWire.MailboxAddressSize));
 
@@ -848,7 +867,7 @@ public sealed class RendezvousServer(int requestedPort, PeerDirectory directory,
             catch (Exception e)
             {
                 // Une faute ici ne doit pas arrêter le balayage pour toujours.
-                Console.WriteLine($"Balayage en échec ({e.GetType().Name}) : {e.Message}");
+                Log.WriteLine($"Balayage en échec ({e.GetType().Name}) : {e.Message}");
             }
         }
     }

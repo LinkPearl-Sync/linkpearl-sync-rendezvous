@@ -15,8 +15,10 @@ public static class AdminToken
 {
     private const int Length = 32;
 
-    public static string LoadOrCreate(string path)
+    public static string LoadOrCreate(string path, TextWriter? log = null)
     {
+        log ??= Console.Out;
+
         if (File.Exists(path))
         {
             var existing = File.ReadAllText(path).Trim();
@@ -37,8 +39,9 @@ public static class AdminToken
             File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
         }
 
-        Console.WriteLine($"Jeton d'administration engendré dans {path} :");
-        Console.WriteLine($"  {token}");
+        // Le chemin, et pas le jeton : un journal est relu par des yeux qui
+        // n'ont pas à ouvrir la console, et copié dans des rapports.
+        log.WriteLine($"Jeton d'administration engendré dans {path}. Le lire là pour ouvrir la console.");
 
         return token;
     }
