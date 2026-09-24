@@ -40,6 +40,14 @@ public sealed class PeerSession(TcpClient client) : IDisposable
 
     public int KeyCount => _keys.Count;
 
+    /// <summary>Pages de liste de bannissement servies sur cette connexion.</summary>
+    /// <remarks>
+    /// Trois octets de demande pour jusqu'à 64 Kio de réponse : sans plafond,
+    /// une connexion ferait du service un amplificateur. Une liste entière se
+    /// lit en 64 pages au plus.
+    /// </remarks>
+    public int BanPagesServed { get; set; }
+
     public bool HasKey(string key) => _keys.ContainsKey(key);
 
     public void Remember(string key) => _keys[key] = 0;

@@ -114,8 +114,8 @@ foreach (var target in ArgAll("--announce-to"))
 // console, la surcharge s'il existe. Sans fichier, rien ne change.
 var settings = new SettingsStore(ArgString("--settings", "settings.json"));
 var limits = settings.Load(new RendezvousLimits { AnnouncementsPerMinute = rate }, Console.Out);
-var service = new RendezvousServer(port, directory, limits, clock, verbose: args.Contains("--verbose"));
 var bans = new BanStore(ArgString("--bans", "bans.json"));
+var service = new RendezvousServer(port, directory, limits, clock, verbose: args.Contains("--verbose")) { Bans = bans };
 
 // La liste est chargée tout de suite, et non à la première requête : c'est ce
 // qui écrit le sel au premier démarrage, et un sel qui naîtrait plus tard

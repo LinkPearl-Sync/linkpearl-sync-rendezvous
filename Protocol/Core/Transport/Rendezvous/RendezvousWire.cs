@@ -48,6 +48,12 @@ public static class RendezvousKind
     /// dépose une candidature dans une file que l'opérateur lira.
     /// </remarks>
     public const byte DirectorySubmit = 0x14;
+
+    /// <summary>Demande une page de la liste de bannissement du service.</summary>
+    public const byte BanListQuery = 0x15;
+
+    /// <summary>Une page : son numéro, le nombre de pages, puis le JSON d'une <c>BanList</c>.</summary>
+    public const byte BanListData = 0x16;
 }
 
 /// <summary>Ce qu'un client annonce au rendez-vous.</summary>
@@ -442,6 +448,86 @@ public static class RendezvousWire
 
         value = System.Text.Encoding.UTF8.GetString(frame.Slice(offset, length));
         offset += length;
+        rejection = null;
+        return true;
+    }
+
+    /// <summary>
+    /// Entrées de la liste de bannissement par page.
+    /// </summary>
+    /// <remarks>
+    /// Une entrée pèse jusqu'à 860 octets en JSON indenté : un motif de 120
+    /// caractères que l'encodeur par défaut échappe chacun en six. Soixante-
+    /// quatre tiennent sous une trame, et soixante-quatre pages couvrent les
+    /// 4 096 entrées qu'une liste peut compter. Tronquer à une trame ferait un
+    /// banni que plus personne ne voit, sans que rien le dise.
+    /// </remarks>
+    public const int BanListPageEntries = 64;
+
+    public const int MaxBanListPages = 64;
+
+    public static byte[] BanListQuery(int page)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(page);
+        ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual(page, MaxBanListPages);
+
+        return [RendezvousKind.BanListQuery, (byte)(page >> 8), (byte)page];
+    }
+
+    public static bool TryReadBanListQuery(ReadOnlySpan<byte> frame, out int page)
+    {
+        page = 0;
+
+        if (frame.Length != 3 || frame[0] != RendezvousKind.BanListQuery)
+            return false;
+
+        page = (frame[1] << 8) | frame[2];
+        return page < MaxBanListPages;
+    }
+
+    public static byte[] BanListData(int page, int pages, string json)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(pages, 1);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(pages, MaxBanListPages);
+        ArgumentOutOfRangeException.ThrowIfNegative(page);
+        ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual(page, pages);
+
+        var text = System.Text.Encoding.UTF8.GetBytes(json);
+
+        if (5 + text.Length > MaxFrameLength)
+            throw new ArgumentException($"page de {text.Length} octets, au-delà d'une trame", nameof(json));
+
+        var frame = new byte[5 + text.Length];
+        frame[0] = RendezvousKind.BanListData;
+        BinaryPrimitives.WriteUInt16BigEndian(frame.AsSpan(1), (ushort)page);
+        BinaryPrimitives.WriteUInt16BigEndian(frame.AsSpan(3), (ushort)pages);
+        text.CopyTo(frame.AsSpan(5));
+        return frame;
+    }
+
+    public static bool TryReadBanListData(
+        ReadOnlySpan<byte> frame, out int page, out int pages, out string json, out string? rejection)
+    {
+        page = 0;
+        pages = 0;
+        json = string.Empty;
+
+        if (frame.Length < 6 || frame[0] != RendezvousKind.BanListData)
+        {
+            rejection = "page de liste malformée";
+            return false;
+        }
+
+        page = BinaryPrimitives.ReadUInt16BigEndian(frame[1..]);
+        pages = BinaryPrimitives.ReadUInt16BigEndian(frame[3..]);
+
+        if (pages is < 1 or > MaxBanListPages || page >= pages)
+        {
+            rejection = $"page {page} sur {pages}, hors bornes (plafond {MaxBanListPages})";
+            return false;
+        }
+
+        json = System.Text.Encoding.UTF8.GetString(frame[5..]);
         rejection = null;
         return true;
     }

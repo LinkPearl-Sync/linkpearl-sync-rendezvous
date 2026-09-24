@@ -28,6 +28,8 @@ public sealed class ServerHarness : IAsyncDisposable
 
     public PeerDirectory Directory { get; private set; } = null!;
 
+    public BanStore Bans { get; private set; } = null!;
+
     public RendezvousServer Server { get; private set; } = null!;
 
     public int Port { get; private set; }
@@ -58,10 +60,13 @@ public sealed class ServerHarness : IAsyncDisposable
         harness.Directory = new PeerDirectory(
             Path.Combine(harness._dir, "peers.txt"), Path.Combine(harness._dir, "pending.txt"));
 
+        harness.Bans = new BanStore(Path.Combine(harness._dir, "bans.json"));
+
         harness.Server = new RendezvousServer(
             0, harness.Directory, limits ?? RendezvousLimits.Default, harness.Clock, verbose)
         {
             Log = harness._log,
+            Bans = harness.Bans,
         };
 
         harness._running = harness.Server.RunAsync(harness._stopping.Token);

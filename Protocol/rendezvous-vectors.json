@@ -13,7 +13,9 @@
     "chargeTicketMax": 256,
     "entreesAnnuaireMax": 64,
     "libelleAnnuaireMax": 64,
-    "adresseAnnuaireMax": 255
+    "adresseAnnuaireMax": 255,
+    "entreesParPageBannissement": 64,
+    "pagesBannissementMax": 64
   },
   "trames": [
     {
@@ -83,6 +85,14 @@
     {
       "nom": "annuaire-candidature",
       "hex": "14010e7264762e6e6f75766561752e63680f4368657a206c65206e6f7576656175"
+    },
+    {
+      "nom": "bannissement-demande",
+      "hex": "150001"
+    },
+    {
+      "nom": "bannissement-page",
+      "hex": "16000000027b2276657273696f6e223a317d"
     }
   ]
 }

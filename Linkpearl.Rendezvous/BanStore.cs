@@ -40,6 +40,29 @@ public sealed class BanStore(string path)
     }
 
     /// <summary>
+    /// Une page de la liste, et le nombre de pages.
+    /// </summary>
+    /// <remarks>
+    /// Chaque page est une liste entière sous le même sel, pour que le client
+    /// la lise avec le même code qu'une liste complète. Hors de la liste, le
+    /// JSON est nul et le nombre de pages dit jusqu'où aller.
+    /// </remarks>
+    public (string? Json, int Pages) Page(int index, int size)
+    {
+        lock (_gate)
+        {
+            var list = LoadLocked();
+            var pages = Math.Max(1, (list.Entries.Count + size - 1) / size);
+
+            if (index < 0 || index >= pages)
+                return (null, pages);
+
+            var slice = list.Entries.Skip(index * size).Take(size).ToList();
+            return (new BanList(list.Salt, list.Parameters, slice).ToJson(UpdatedLocked()), pages);
+        }
+    }
+
+    /// <summary>
     /// Ajoute un personnage. Rend son empreinte, ou null s'il y figurait déjà.
     /// </summary>
     public string? Add(string name, ushort world, string reason)

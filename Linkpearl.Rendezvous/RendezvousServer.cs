@@ -41,6 +41,9 @@ public sealed class RendezvousServer(
     /// <summary>Où le service écrit ce qu'il fait.</summary>
     public TextWriter Log { get; init; } = Console.Out;
 
+    /// <summary>La liste que le service publie ; nulle, il répond qu'il n'en a pas.</summary>
+    public BanStore? Bans { get; init; }
+
     /// <summary>
     /// Une ligne de journal, avec ou sans son détail.
     /// </summary>
@@ -465,6 +468,7 @@ public sealed class RendezvousServer(
                     RendezvousKind.MailboxDeposit => await HandleMailboxDepositAsync(session, frame, ct).ConfigureAwait(false),
                     RendezvousKind.DirectoryQuery => await HandleDirectoryQueryAsync(session, ct).ConfigureAwait(false),
                     RendezvousKind.DirectorySubmit => HandleDirectorySubmit(session, frame),
+                    RendezvousKind.BanListQuery => await HandleBanListQueryAsync(session, frame, ct).ConfigureAwait(false),
                     _ => false,
                 };
 
@@ -524,6 +528,43 @@ public sealed class RendezvousServer(
     {
         if (RendezvousWire.TryReadDirectory(frame, out var submitted, out _) && submitted.Count is 1)
             directory.Submit(session.Bucket, submitted[0]);
+
+        return true;
+    }
+
+    /// <summary>
+    /// Sert une page de la liste de bannissement.
+    /// </summary>
+    /// <remarks>
+    /// La même que <c>GET /api/bans</c>, découpée : la console n'écoute qu'en
+    /// local, et c'est ici que les clients la trouvent. Une page hors de la
+    /// liste n'est pas une faute : la liste a pu raccourcir entre deux pages.
+    /// </remarks>
+    private async Task<bool> HandleBanListQueryAsync(PeerSession session, byte[] frame, CancellationToken ct)
+    {
+        if (RendezvousWire.TryReadBanListQuery(frame, out var page) is false)
+        {
+            await session.SendAsync(RendezvousWire.Error("demande de liste malformée"), ct).ConfigureAwait(false);
+            return false;
+        }
+
+        if (++session.BanPagesServed > RendezvousWire.MaxBanListPages)
+        {
+            await session.SendAsync(RendezvousWire.Error("trop de pages demandées"), ct).ConfigureAwait(false);
+            return false;
+        }
+
+        if (Bans is null)
+        {
+            await session.SendAsync(RendezvousWire.Error("liste de bannissement indisponible"), ct).ConfigureAwait(false);
+            return true;
+        }
+
+        var (json, pages) = Bans.Page(page, RendezvousWire.BanListPageEntries);
+
+        await session.SendAsync(
+            json is null ? RendezvousWire.Error("page hors de la liste") : RendezvousWire.BanListData(page, pages, json),
+            ct).ConfigureAwait(false);
 
         return true;
     }
