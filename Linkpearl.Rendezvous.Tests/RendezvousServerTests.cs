@@ -480,6 +480,35 @@ public sealed class SharedKeyTests
         Assert.Equal(new byte[] { 9, 9, 9 }, (await b.ReadFrameAsync())![1..]);
         Assert.Equal(0, harness.Server.Snapshot().RelayWaiting);
     }
+
+    [Fact]
+    public async Task Deux_demandes_simultanees_sont_pontees()
+    {
+        // Les deux pairs passent au relais après le même budget de perçage,
+        // donc à la même milliseconde. Chacun ne trouvait personne en attente,
+        // chacun se garait, et le second écrasait le premier : « relais sans
+        // partenaire » trente secondes plus tard. Vu avec le banc, deux fois
+        // sur deux.
+        await using var harness = await ServerHarness.StartAsync(
+            RendezvousLimits.Default with { AnnouncementsPerMinute = 10_000 });
+
+        for (var round = 0; round < 50; round++)
+        {
+            var a = await harness.ConnectAsync();
+            var b = await harness.ConnectAsync();
+            var ticket = Ticket((byte)round);
+
+            await Task.WhenAll(
+                a.SendAsync(RendezvousWire.RelayOpen(ticket)),
+                b.SendAsync(RendezvousWire.RelayOpen(ticket)));
+
+            Assert.Equal(RendezvousKind.RelayReady, (await a.ReadFrameAsync())![0]);
+            Assert.Equal(RendezvousKind.RelayReady, (await b.ReadFrameAsync())![0]);
+
+            a.Dispose();
+            b.Dispose();
+        }
+    }
 }
 
 /// <summary>Ce que le journal dit, et surtout ce qu'il tait.</summary>

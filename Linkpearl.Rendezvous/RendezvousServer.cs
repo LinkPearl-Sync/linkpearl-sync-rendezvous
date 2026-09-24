@@ -624,42 +624,58 @@ public sealed class RendezvousServer(
 
         var key = Convert.ToHexStringLower(frame.AsSpan(1));
 
-        if (_relayWaiting.TryGetValue(key, out var partner)
-            && ReferenceEquals(partner.Session, session) is false
-            && _relayWaiting.TryRemove(new KeyValuePair<string, (PeerSession, DateTimeOffset)>(key, partner)))
+        // Une boucle, et on ne se gare que par TryAdd : les deux pairs passent
+        // au relais après le même budget de perçage, donc souvent à la même
+        // milliseconde. Avec un test puis une écriture, chacun ne voyait
+        // personne, chacun se garait, et le second écrasait le premier. Les
+        // deux attendaient alors un partenaire qui était déjà là.
+        while (true)
         {
-            partner.Session.ForgetKey(key);
-
-            if (await partner.Session.TrySendAsync(RendezvousWire.Simple(RendezvousKind.RelayReady), ct).ConfigureAwait(false))
+            if (_relayWaiting.TryGetValue(key, out var partner))
             {
-                Interlocked.Increment(ref _relayed);
-                Note("relais ouvert", $"[{key[..8]}] {partner.Session.Address} et {session.Address}");
+                if (ReferenceEquals(partner.Session, session))
+                    return true;
 
-                await session.SendAsync(RendezvousWire.Simple(RendezvousKind.RelayReady), ct).ConfigureAwait(false);
+                // Un autre l'a pris entre-temps : on regarde à nouveau.
+                if (_relayWaiting.TryRemove(new KeyValuePair<string, (PeerSession, DateTimeOffset)>(key, partner)) is false)
+                    continue;
 
-                Interlocked.Increment(ref _activeRelays);
+                partner.Session.ForgetKey(key);
 
-                try
+                if (await partner.Session.TrySendAsync(RendezvousWire.Simple(RendezvousKind.RelayReady), ct).ConfigureAwait(false))
                 {
-                    await PeerSession.PipeAsync(partner.Session, session, ct).ConfigureAwait(false);
-                }
-                finally
-                {
-                    Interlocked.Decrement(ref _activeRelays);
+                    Interlocked.Increment(ref _relayed);
+                    Note("relais ouvert", $"[{key[..8]}] {partner.Session.Address} et {session.Address}");
+
+                    await session.SendAsync(RendezvousWire.Simple(RendezvousKind.RelayReady), ct).ConfigureAwait(false);
+
+                    Interlocked.Increment(ref _activeRelays);
+
+                    try
+                    {
+                        await PeerSession.PipeAsync(partner.Session, session, ct).ConfigureAwait(false);
+                    }
+                    finally
+                    {
+                        Interlocked.Decrement(ref _activeRelays);
+                    }
+
+                    return true;
                 }
 
-                return true;
+                // Le partenaire garé est mort sans qu'on l'ait vu : on le libère
+                // pour que sa boucle de service se termine, et on attend à sa place.
+                partner.Session.ReleaseFromRelay();
+                continue;
             }
 
-            // Le partenaire garé est mort sans qu'on l'ait vu : on le libère
-            // pour que sa boucle de service se termine, et on attend à sa place.
-            partner.Session.ReleaseFromRelay();
+            if (_relayWaiting.TryAdd(key, (session, clock.UtcNow)))
+            {
+                session.Remember(key);
+                session.Park();
+                return true;
+            }
         }
-
-        _relayWaiting[key] = (session, clock.UtcNow);
-        session.Remember(key);
-        session.Park();
-        return true;
     }
 
     private async Task<bool> HandleRegisterTicketAsync(PeerSession session, byte[] frame, CancellationToken ct)
