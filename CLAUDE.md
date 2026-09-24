@@ -1,6 +1,6 @@
 # Linkpearl, service de rendez-vous : conventions du dépôt
 
-Le serveur de [Linkpearl](https://github.com/LinkPearl-Sync/linkpearl). Lire son `CLAUDE.md`
+Le serveur de [Linkpearl](https://github.com/LinkPearl-Sync/linkpearl-sync-plugin), cloné à côté dans `../plugin`. Lire son `CLAUDE.md`
 et son `docs/reprise.md` avant toute décision qui touche au protocole.
 
 ## Les deux règles dont la violation coûte le plus cher

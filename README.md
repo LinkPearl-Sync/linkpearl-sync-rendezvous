@@ -1,6 +1,6 @@
 # Linkpearl, service de rendez-vous
 
-Le seul service de [Linkpearl](https://github.com/LinkPearl-Sync/linkpearl), la
+Le seul service de [Linkpearl](https://github.com/LinkPearl-Sync/linkpearl-sync-plugin), la
 synchronisation pair à pair de l'apparence moddée dans Final Fantasy XIV.
 
 Il aide deux pairs à se trouver, et relaie des octets chiffrés quand la connexion directe
