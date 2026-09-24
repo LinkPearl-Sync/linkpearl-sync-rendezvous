@@ -38,6 +38,22 @@ boîte, parce qu'un journal est un fichier qui reste, relu et copié. `--verbose
 détail, adresses comprises, pour diagnostiquer une soirée ; le ticket d'invitation
 n'apparaît dans aucun des deux modes.
 
+## Déployer
+
+```sh
+LPRDV_HOST=debian@203.0.113.7 LPRDV_KEY=~/.ssh/ma_cle ./deploy/deploy.sh
+```
+
+Le script compile un binaire autonome, le pose dans `/opt/lprdv/`, installe l'unité
+`deploy/lprdv.service` et redémarre le service, puis attend que `/healthz` réponde. Il lui
+faut un compte distant avec sudo, et il est rejouable : le premier passage crée le compte
+système `lprdv`, les suivants ne remplacent que le binaire.
+
+Le service tourne sous `lprdv`, sans capacité, avec le système de fichiers en lecture seule
+sauf `/var/lib/lprdv`, où vit tout l'état, et redémarre seul s'il tombe. Un service lancé à
+la main dans un terminal SSH s'arrête avec lui, et personne ne le voit : c'est ce qui est
+arrivé au premier déploiement public. `journalctl -u lprdv` donne le journal.
+
 ## Ce qui est sur le disque
 
 Rien de ce que le rendez-vous fait : les jetons, les attentes, les boîtes ouvertes et les

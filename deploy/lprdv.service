@@ -1,0 +1,54 @@
+# Unité systemd du service de rendez-vous.
+#
+# Tout l'état (admin.token, bans.json, settings.json, peers.txt, pending.txt)
+# vit dans /var/lib/lprdv, que les chemins par défaut de lprdv trouvent
+# puisqu'ils sont relatifs au répertoire de travail. bans.json porte le sel des
+# empreintes : le perdre rend la liste incomparable à celle des autres services.
+#
+# Le premier déploiement public tournait dans un terminal SSH, et s'est arrêté
+# avec lui sans que personne le voie : d'où Restart=always.
+
+[Unit]
+Description=Service de rendez-vous Linkpearl
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=lprdv
+Group=lprdv
+WorkingDirectory=/var/lib/lprdv
+ExecStart=/opt/lprdv/lprdv --port 47900
+Restart=always
+RestartSec=5
+# Sans plafond, un tas .NET mal borné prendrait la mémoire du VPS entier.
+MemoryMax=512M
+LimitNOFILE=65536
+
+# Durcissement. Pas de MemoryDenyWriteExecute : le JIT de .NET écrit du code
+# exécutable, et le service ne démarrerait plus.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallArchitectures=native
+StateDirectory=lprdv
+StateDirectoryMode=0700
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
