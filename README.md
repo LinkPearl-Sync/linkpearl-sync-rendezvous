@@ -17,9 +17,13 @@ Ce qu'il voit, et qui est irréductible sans relais systématique : les adresses
 noms de personnage sont en ligne, une adresse de boîte dérivant du nom. C'est dit ici plutôt
 que passé sous silence.
 
-Le rendez-vous **n'est pas une autorité**. L'autorisation vient du carnet de pairs local de
-chaque joueur, et la clé publique vient du code d'invitation. Un rendez-vous malveillant
-peut faire échouer une connexion, jamais usurper une identité.
+Le rendez-vous **n'est une autorité qu'au pairage**. L'autorisation vient du carnet de pairs
+local de chaque joueur, mais la clé publique d'un pair y arrive par la boîte aux lettres du
+service, en clair : un opérateur malveillant peut s'intercaler au premier contact, sans que
+personne s'en aperçoive. Une fois la clé épinglée dans le carnet, il peut faire échouer une
+connexion, jamais usurper une identité. Le modèle de confiance complet est dans
+[`docs/protocol.md`](https://github.com/LinkPearl-Sync/linkpearl-sync-plugin/blob/main/docs/protocol.md)
+du plugin.
 
 ## Lancer
 
