@@ -64,6 +64,8 @@ LPRDV_HOST=debian@83.228.242.221 LPRDV_KEY=~/.ssh/linkpearl_rdv ./deploy/deploy.
 - Jamais de service lancé à la main dans un terminal SSH : il meurt avec la session, et
   le premier déploiement public est resté hors ligne sans que personne le voie.
 
-Publier une version : tag `vX.Y.Z` sur `main`, puis `gh release create` avec le binaire
-compilé par `dotnet publish Linkpearl.Rendezvous -c Release -r linux-x64 --self-contained
--p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true -p:Version=X.Y.Z`.
+Publier une version : `git tag -a vX.Y.Z -m vX.Y.Z` sur `main`, puis pousser le tag.
+`.github/workflows/release.yml` vérifie (build sans warning, tests), compile le binaire
+autonome et publie la release avec `lprdv` et `lprdv.sha256`. Un suffixe (`v0.3.0-rc1`)
+en fait une pré-version. Le workflow ne déploie pas : aucun secret SSH dans le dépôt,
+`deploy.sh` reste lancé à la main.

@@ -1,0 +1,87 @@
+name: Publier le service
+
+# Une version se publie en poussant un tag sur main :
+#
+#   git tag -a v0.3.0 -m v0.3.0 && git push origin v0.3.0
+#
+# Le workflow publie, il ne déploie pas : mettre en ligne reste
+# deploy/deploy.sh, lancé par l'opérateur, parce qu'un secret SSH vers le VPS
+# dans ce dépôt ouvrirait la production à quiconque peut pousser un tag.
+
+# Le nom affiché de chaque exécution : sans lui, GitHub reprend le titre du
+# dernier commit, qui ne dit rien de ce qui est publié. Le tag n'est ici
+# qu'un texte affiché, jamais exécuté.
+run-name: Publication ${{ github.ref_name }}
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    # Les actions sont épinglées sur une empreinte de commit et non sur une
+    # étiquette. Une étiquette se redéplace : celui qui la contrôle exécuterait
+    # son code dans ce workflow, qui écrit sur le dépôt et publie le binaire
+    # que les opérateurs installent.
+    steps:
+      - name: Récupérer le dépôt
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+
+      - name: Lire le tag
+        id: tag
+        # La version vient du nom du tag, que quelqu'un choisit. Passée par
+        # l'environnement plutôt qu'interpolée dans le script, elle ne peut pas
+        # être lue comme du shell.
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          VERSION="${TAG#v}"
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+            echo "Tag « $TAG » : attendu vX.Y.Z ou vX.Y.Z-suffixe." >&2
+            exit 1
+          fi
+          PRERELEASE=false
+          [[ "$VERSION" == *-* ]] && PRERELEASE=true
+          echo "VERSION=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "PRERELEASE=$PRERELEASE" >> "$GITHUB_OUTPUT"
+
+      - name: Installer .NET
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9  # v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Vérifier
+        # Un échec ici doit empêcher la publication, pas être découvert par un
+        # opérateur après sa mise à jour.
+        run: |
+          dotnet build Linkpearl.Rendezvous/Linkpearl.Rendezvous.csproj -c Release -warnaserror --nologo
+          dotnet test Linkpearl.Rendezvous.Tests/Linkpearl.Rendezvous.Tests.csproj --nologo
+
+      - name: Compiler le binaire autonome
+        env:
+          VERSION: ${{ steps.tag.outputs.VERSION }}
+        # Autonome et en un seul fichier : l'opérateur n'installe aucun runtime
+        # .NET. Compressé, il passe de 74 à 39 Mo.
+        run: |
+          dotnet publish Linkpearl.Rendezvous -c Release -r linux-x64 --self-contained \
+            -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true \
+            "-p:Version=$VERSION" -o out --nologo
+          ./out/lprdv --help | head -1
+          cd out && sha256sum lprdv > lprdv.sha256 && cat lprdv.sha256
+
+      - name: Publier la version
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: v${{ steps.tag.outputs.VERSION }}
+          prerelease: ${{ steps.tag.outputs.PRERELEASE == 'true' }}
+          files: |
+            out/lprdv
+            out/lprdv.sha256
+          generate_release_notes: true
