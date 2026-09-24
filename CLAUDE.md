@@ -45,10 +45,13 @@ exigerait `network_mode: host`, sans quoi la réflexion UDP renverrait l'adresse
 Docker au lieu de celle du client.
 
 ```sh
-LPRDV_HOST=debian@83.228.242.221 LPRDV_KEY=~/.ssh/linkpearl_rdv ./deploy/deploy.sh
+LPRDV_HOST=debian@rdv.linkpearl.eorzea.events LPRDV_KEY=~/.ssh/linkpearl_rdv ./deploy/deploy.sh
 ```
 
-- Le VPS de production est `83.228.242.221` (Infomaniak, Debian 13). Compte `debian`,
+- Le VPS de production est `rdv.linkpearl.eorzea.events`, le nom que le plugin distribue
+  (`83.228.242.221` et `2001:1600:18:202::1e4`, Infomaniak, Debian 13). Enregistrements
+  DNS chez Cloudflare en « DNS only » : le proxy ne laisse passer ni le port 47900 ni l'UDP,
+  et la réflexion renverrait l'adresse de Cloudflare. Compte `debian`,
   sudo sans mot de passe, clé `~/.ssh/linkpearl_rdv` réservée à ce déploiement.
 - `deploy.sh` compile, pose `/opt/lprdv/lprdv` par renommage, installe
   `deploy/lprdv.service`, redémarre et attend `/healthz`. Il est rejouable : le premier
@@ -57,7 +60,7 @@ LPRDV_HOST=debian@83.228.242.221 LPRDV_KEY=~/.ssh/linkpearl_rdv ./deploy/deploy.
   le perdre rend notre liste incomparable à celle des autres services. Ne jamais
   l'écraser ni le régénérer.
 - Vérifier de l'extérieur depuis le dépôt du plugin : lancer en parallèle
-  `dotnet run --project Linkpearl.Harness -c Release -- rdv 83.228.242.221 47900 alice`
+  `dotnet run --project Linkpearl.Harness -c Release -- rdv rdv.linkpearl.eorzea.events 47900 alice`
   et la même avec `bob`. Les deux doivent finir par « TOUT EST PASSÉ ».
 - Journal : `journalctl -u lprdv`. Console : `ssh -L 47901:127.0.0.1:47901`, le jeton est
   dans `/var/lib/lprdv/admin.token`.
