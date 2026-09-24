@@ -231,6 +231,12 @@ public sealed class LimiterTests
     }
 
     [Fact]
+    public void Une_connexion_tient_par_defaut_les_boites_de_dix_groupes()
+        // Deux personnelles, puis deux de présence et deux d'admission par
+        // groupe au changement de fenêtre : 42 pour dix groupes.
+        => Assert.True(new RendezvousLimits().MaxMailboxesPerSession >= 42);
+
+    [Fact]
     public async Task Une_session_nattend_pas_sur_plus_de_jetons_que_le_plafond()
     {
         await using var harness = await ServerHarness.StartAsync(new RendezvousLimits { MaxWaitingKeysPerSession = 2 });

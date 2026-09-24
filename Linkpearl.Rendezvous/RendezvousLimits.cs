@@ -41,8 +41,15 @@ public sealed record RendezvousLimits
     /// </remarks>
     public TimeSpan FirstFrameTimeout { get; init; } = TimeSpan.FromSeconds(10);
 
-    /// <summary>Boîtes qu'une même connexion peut tenir ouvertes.</summary>
-    public int MaxMailboxesPerSession { get; init; } = 16;
+    /// <summary>
+    /// Boîtes qu'une même connexion peut tenir ouvertes.
+    /// </summary>
+    /// <remarks>
+    /// Deux personnelles, et deux de présence plus deux d'admission par groupe
+    /// au changement de fenêtre : 42 pour les dix groupes qu'un personnage peut
+    /// avoir. Le client se reconnecte avant d'atteindre la limite.
+    /// </remarks>
+    public int MaxMailboxesPerSession { get; init; } = 64;
 
     /// <summary>Jetons sur lesquels une même connexion peut attendre un pair.</summary>
     public int MaxWaitingKeysPerSession { get; init; } = 64;
