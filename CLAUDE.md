@@ -37,3 +37,33 @@ dotnet run --project Linkpearl.Rendezvous -- --port 47900 --admin-port 47901
 La liste de bannissement (`Protocol/Core/Safety/BanList.cs`) fait partie de la copie
 littérale : le client doit dériver à l'identique, sans quoi une liste ne protège personne.
 `BanListTests.cs` est copié lui aussi, et c'est lui qui attrape une dérive de dérivation.
+
+## Déploiement
+
+Pas de Docker, et c'est voulu : un binaire autonome sous systemd suffit, et un conteneur
+exigerait `network_mode: host`, sans quoi la réflexion UDP renverrait l'adresse du pont
+Docker au lieu de celle du client.
+
+```sh
+LPRDV_HOST=debian@83.228.242.221 LPRDV_KEY=~/.ssh/linkpearl_rdv ./deploy/deploy.sh
+```
+
+- Le VPS de production est `83.228.242.221` (Infomaniak, Debian 13). Compte `debian`,
+  sudo sans mot de passe, clé `~/.ssh/linkpearl_rdv` réservée à ce déploiement.
+- `deploy.sh` compile, pose `/opt/lprdv/lprdv` par renommage, installe
+  `deploy/lprdv.service`, redémarre et attend `/healthz`. Il est rejouable : le premier
+  passage crée le compte système `lprdv`.
+- Tout l'état vit dans `/var/lib/lprdv`. `bans.json` y porte le sel des empreintes :
+  le perdre rend notre liste incomparable à celle des autres services. Ne jamais
+  l'écraser ni le régénérer.
+- Vérifier de l'extérieur depuis le dépôt du plugin : lancer en parallèle
+  `dotnet run --project Linkpearl.Harness -c Release -- rdv 83.228.242.221 47900 alice`
+  et la même avec `bob`. Les deux doivent finir par « TOUT EST PASSÉ ».
+- Journal : `journalctl -u lprdv`. Console : `ssh -L 47901:127.0.0.1:47901`, le jeton est
+  dans `/var/lib/lprdv/admin.token`.
+- Jamais de service lancé à la main dans un terminal SSH : il meurt avec la session, et
+  le premier déploiement public est resté hors ligne sans que personne le voie.
+
+Publier une version : tag `vX.Y.Z` sur `main`, puis `gh release create` avec le binaire
+compilé par `dotnet publish Linkpearl.Rendezvous -c Release -r linux-x64 --self-contained
+-p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true -p:Version=X.Y.Z`.
