@@ -30,6 +30,8 @@ public sealed class PeerSession(TcpClient client) : IDisposable
 
     public string Address => _remote.ToString();
 
+    public IPAddress Remote => _remote;
+
     public Socket Socket => client.Client;
 
     /// <summary>La clé sous laquelle le limiteur compte cette connexion.</summary>

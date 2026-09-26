@@ -538,8 +538,9 @@ public sealed class RendezvousServer(
     {
         if (RendezvousWire.TryReadDirectory(frame, out var submitted, out _) && submitted.Count is 1)
         {
-            directory.Submit(session.Bucket, submitted[0]);
-            Candidacy?.Invoke(submitted[0], session.Bucket);
+            var entry = Announcer.Resolve(submitted[0], session.Remote);
+            directory.Submit(session.Bucket, entry);
+            Candidacy?.Invoke(entry, session.Bucket);
         }
 
         return true;

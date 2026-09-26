@@ -85,4 +85,16 @@ public sealed class AnnouncerTests
 
         Assert.True(stop.IsCancellationRequested);
     }
+
+    [Fact]
+    public void Sans_consigne_le_service_se_presente_a_l_autorite_officielle()
+        => Assert.Equal(["rdv.linkpearl.eorzea.events"], Announcer.Targets([], optOut: false));
+
+    [Fact]
+    public void Des_annuaires_donnes_remplacent_l_autorite_officielle()
+        => Assert.Equal(["annuaire.ami.ch"], Announcer.Targets(["annuaire.ami.ch"], optOut: false));
+
+    [Fact]
+    public void Le_refus_l_emporte_sur_tout()
+        => Assert.Empty(Announcer.Targets(["annuaire.ami.ch"], optOut: true));
 }

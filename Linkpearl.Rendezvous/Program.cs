@@ -47,9 +47,12 @@ if (args.Contains("--help"))
                    dans --peers celles qu'on accepte.
 
         --announce-to      annuaire auprès duquel se porter candidat, au démarrage
-                           puis chaque jour. Répétable.
-        --public-address   l'adresse sous laquelle les autres vous joignent, à
-                           donner avec --announce-to.
+                           puis chaque jour. Répétable. Par défaut, l'autorité du
+                           cercle ouvert (rdv.linkpearl.eorzea.events).
+        --no-announce      ne se porter candidat nulle part.
+        --public-address   l'adresse sous laquelle les autres vous joignent. Par
+                           défaut, l'annuaire retient l'adresse IPv4 d'où part la
+                           candidature, avec le port de --port.
         --label            le nom qui s'affichera dans les annuaires.
 
         --directory-authority  tient le rôle d'autorité du cercle ouvert : sonde
@@ -104,7 +107,7 @@ Console.CancelKeyPress += (_, e) => { e.Cancel = true; stopping.Cancel(); };
 
 // La candidature part au démarrage puis chaque jour, et le service n'attend
 // rien en retour : c'est l'annuaire, ou son autorité, qui décidera.
-foreach (var target in ArgAll("--announce-to"))
+foreach (var target in Announcer.Targets(ArgAll("--announce-to"), optOut: args.Contains("--no-announce")))
 {
     if (RendezvousAddress.TryParse(target, out var to, out var why) is false)
     {
@@ -114,7 +117,7 @@ foreach (var target in ArgAll("--announce-to"))
 
     _ = Announcer.SubmitEveryAsync(
         to,
-        ArgString("--public-address", $"localhost:{port}"),
+        ArgString("--public-address", $"{Announcer.Unspecified}:{port}"),
         ArgString("--label", ""),
         Announcer.Interval,
         stopping.Token);

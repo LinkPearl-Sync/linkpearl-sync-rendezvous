@@ -98,6 +98,21 @@ public sealed class AuthorityServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task Une_candidature_sans_adresse_publique_prend_celle_de_l_envoi()
+    {
+        var received = new TaskCompletionSource<DirectoryEntry>();
+        await using var harness = await ServerHarness.StartAsync(
+            candidacy: (entry, _) => received.TrySetResult(entry));
+        using var client = await harness.ConnectAsync();
+
+        await client.SendAsync(RendezvousWire.DirectorySubmit("localhost:47950", "Sans adresse"));
+        var entry = await received.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal("127.0.0.1:47950", entry.Address);
+        Assert.Equal("Sans adresse", entry.Label);
+    }
+
+    [Fact]
     public async Task L_etat_public_suit_les_rondes()
     {
         _authority.Ledger.Track(new DirectoryEntry("rdv.candidat.ch", "Candidat"), "203.0.113.7");

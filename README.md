@@ -204,7 +204,7 @@ Avec `--directory-authority`, le service tient en plus le rôle d'autorité du c
 Il est désactivé par défaut : un service autohébergé n'en a pas l'usage, et le plugin
 n'accepterait de toute façon que la liste signée par une clé qu'il connaît.
 
-L'autorité sonde toutes les dix minutes les candidats reçus par `--announce-to`, jamais une
+L'autorité sonde toutes les dix minutes les candidats reçus, jamais une
 adresse non publique. Une candidature est liée à l'adresse qui l'a envoyée : le service
 n'entre que s'il répond depuis cette adresse (ou ce /64), pour que personne n'inscrive le
 service d'un autre. `peers.txt` reste l'annuaire manuel et n'est pas sondé. Un candidat entre dans la liste
@@ -218,9 +218,11 @@ La console montre la clé publique, la version émise, et chaque service suivi a
 état et son taux de réussite. « Écarter » retire un service tout de suite ; l'admission se
 passe de geste humain, le retrait non.
 
-Pour contribuer au cercle ouvert d'un autre, il suffit de lancer son service avec
-`--announce-to <autorité> --public-address <son adresse>` : la candidature part au
-démarrage puis chaque jour.
+Tout service se porte candidat par défaut auprès de l'autorité officielle
+(`rdv.linkpearl.eorzea.events`), au démarrage puis chaque jour. `--announce-to` remplace
+cette cible, `--no-announce` supprime toute candidature. Sans `--public-address`,
+l'autorité retient l'adresse IPv4 d'où part la candidature, avec le port de `--port` :
+la candidature part donc en IPv4, seule famille qu'une adresse littérale sache écrire.
 
 ## Le format de fil est une copie
 

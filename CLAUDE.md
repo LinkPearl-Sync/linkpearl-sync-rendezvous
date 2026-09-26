@@ -34,7 +34,8 @@ dotnet build Linkpearl.Rendezvous/Linkpearl.Rendezvous.csproj -c Release   # san
 dotnet test Linkpearl.Rendezvous.Tests/Linkpearl.Rendezvous.Tests.csproj
 
 # La console, en local : le jeton est dans admin.token, engendré au premier démarrage.
-dotnet run --project Linkpearl.Rendezvous -- --port 47900 --admin-port 47901
+# --no-announce : sans lui, le service local se présenterait à l'autorité de production.
+dotnet run --project Linkpearl.Rendezvous -- --port 47900 --admin-port 47901 --no-announce
 ```
 
 La liste de bannissement (`Protocol/Core/Safety/BanList.cs`) fait partie de la copie
