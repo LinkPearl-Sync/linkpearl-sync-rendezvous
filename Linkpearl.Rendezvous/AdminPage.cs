@@ -22,80 +22,90 @@ public static class AdminPage
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <meta name="robots" content="noindex, nofollow">
         <title>Linkpearl, service de rendez-vous</title>
+        <link rel="preconnect" href="https://fonts.googleapis.com">
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600&family=Nunito:wght@400;700;800&family=JetBrains+Mono:wght@400&display=swap">
         <style>
+          /* Les couleurs, les polices et les formes du site public : la nuit du
+             logo. Sans réseau, les polices retombent sur celles du système. */
           :root {
-            --fond: #12141a; --carte: #1a1d25; --creux: #15171e; --bord: #272b36;
-            --texte: #e9e7e2; --doux: #949aa7; --nacre: #d3bd92; --vert: #7fb08a; --alerte: #d98a7a;
-            --ombre: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.22);
+            color-scheme: dark;
+            --deep: #07123a; --field: #040b26;
+            --carte: rgba(255,255,255,.05); --creux: var(--field); --bord: rgba(143,196,255,.22); --trait: rgba(143,196,255,.14);
+            --texte: #eaf1ff; --doux: #a9b8e6; --nacre: #5fb4ff; --pom: #ffa45c; --vert: #7fd6b0; --alerte: #ff8f7e;
+            --ombre: 0 0 0 1px rgba(143,196,255,.06), 0 10px 30px rgba(2,6,24,.45);
+            --display: "Fredoka", "Nunito", ui-rounded, system-ui, sans-serif;
+            --body: "Nunito", ui-rounded, system-ui, sans-serif;
+            --mono: "JetBrains Mono", ui-monospace, Consolas, monospace;
           }
           * { box-sizing: border-box; }
-          html { -webkit-text-size-adjust: 100%; }
+          html { -webkit-text-size-adjust: 100%; background: var(--deep); }
           body {
-            margin: 0; background: var(--fond); color: var(--texte);
-            font: 15px/1.55 ui-sans-serif, system-ui, "Segoe UI", sans-serif;
-            font-variant-numeric: tabular-nums;
+            margin: 0; min-height: 100vh; color: var(--texte);
+            font: 15px/1.55 var(--body); font-variant-numeric: tabular-nums;
+            background:
+              radial-gradient(ellipse 70% 420px at 50% 120px, #1d3b9a 0%, transparent 70%),
+              radial-gradient(ellipse at 50% 100%, #0c1e5c 0%, var(--deep) 60%);
+            background-attachment: fixed;
           }
           .barre {
             position: sticky; top: 0; z-index: 5; display: flex; flex-wrap: wrap; gap: 1rem;
             align-items: center; justify-content: space-between;
-            padding: .9rem 1.5rem; background: rgba(18,20,26,.92); backdrop-filter: blur(8px);
+            padding: .8rem 1.5rem; background: rgba(4,11,38,.78); backdrop-filter: blur(10px);
             border-bottom: 1px solid var(--bord);
           }
-          .marque { display: flex; align-items: center; gap: .6rem; font-weight: 600; letter-spacing: .01em; }
+          .marque { display: flex; align-items: center; gap: .6rem; font-family: var(--display); font-weight: 600; font-size: 1.1rem; }
           .perle {
-            width: 12px; height: 12px; border-radius: 50%;
-            background: radial-gradient(circle at 32% 30%, #fff, var(--nacre) 55%, #8d7c56);
-            box-shadow: 0 0 10px rgba(211,189,146,.45);
+            width: 14px; height: 14px; border-radius: 50%;
+            background: radial-gradient(circle at 35% 30%, #fff 0 18%, #bfe4ff 30%, #7a9cff 60%, #c79bff 100%);
+            box-shadow: 0 0 12px #7ec3ff;
           }
-          .marque span.doux { font-weight: 400; }
+          .marque span.doux { font-family: var(--body); font-weight: 400; font-size: .9rem; }
           .lien { display: flex; align-items: center; gap: .45rem; font-size: .85rem; color: var(--doux); }
-          .voyant { width: 8px; height: 8px; border-radius: 50%; background: var(--vert); }
-          .voyant.perdu { background: var(--alerte); }
-          main { max-width: 62rem; margin: 0 auto; padding: 1.75rem 1.5rem 4rem; }
+          .voyant { width: 9px; height: 9px; border-radius: 50%; background: var(--vert); box-shadow: 0 0 8px var(--vert); }
+          .voyant.perdu { background: var(--alerte); box-shadow: 0 0 8px var(--alerte); }
+          main { max-width: 64rem; margin: 0 auto; padding: 1.75rem 1.5rem 4rem; }
           h2 {
-            display: flex; align-items: center; gap: .5rem;
-            font-size: .75rem; text-transform: uppercase; letter-spacing: .12em;
-            color: var(--nacre); margin: 2.25rem 0 .75rem; font-weight: 600;
+            display: flex; align-items: center; gap: .55rem;
+            font-family: var(--display); font-size: 1.2rem; font-weight: 600;
+            color: var(--texte); margin: 2.25rem 0 .8rem;
           }
-          h2:first-of-type { margin-top: .5rem; }
-          h2 svg { width: 14px; height: 14px; opacity: .8; }
-          h2 .compte {
-            margin-left: auto; color: var(--doux); font-weight: 400;
-            letter-spacing: normal; text-transform: none; font-size: .8rem;
-          }
-          .panneau { background: var(--carte); border: 1px solid var(--bord); border-radius: 10px; box-shadow: var(--ombre); }
-          .panneau > * { padding: 1rem 1.15rem; }
-          .panneau > * + * { border-top: 1px solid var(--bord); }
-          .doux { color: var(--doux); font-size: .85rem; }
+          main > h2:first-child { margin-top: .5rem; }
+          h2 svg { width: 18px; height: 18px; color: var(--nacre); filter: drop-shadow(0 0 6px rgba(95,180,255,.5)); }
+          h2 .compte { margin-left: auto; color: var(--doux); font-family: var(--body); font-weight: 400; font-size: .85rem; }
+          .panneau { background: var(--carte); border: 1px solid var(--bord); border-radius: 18px; box-shadow: var(--ombre); overflow: hidden; }
+          .panneau > * { padding: 1rem 1.2rem; }
+          .panneau > * + * { border-top: 1px solid var(--trait); }
+          .doux { color: var(--doux); font-size: .88rem; }
           .chiffres { display: grid; grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr)); gap: .8rem; }
           .carte {
-            background: var(--carte); border: 1px solid var(--bord); border-radius: 10px;
-            padding: .9rem 1rem; box-shadow: var(--ombre);
+            background: var(--carte); border: 1px solid var(--bord); border-radius: 18px;
+            padding: .95rem 1.1rem; box-shadow: var(--ombre);
           }
-          .carte b { display: block; font-size: 1.65rem; font-weight: 600; line-height: 1.2; }
+          .carte b { display: block; font-family: var(--display); font-size: 1.75rem; font-weight: 600; line-height: 1.2; }
           .carte b em {
-            font-style: normal; font-size: .9rem; font-weight: 400; color: var(--doux);
+            font-style: normal; font-family: var(--body); font-size: .9rem; font-weight: 400; color: var(--doux);
             margin-left: .2rem; vertical-align: .22em;
           }
-          .carte span { color: var(--doux); font-size: .8rem; }
-          .refus .carte b { font-size: 1.2rem; }
+          .carte span { color: var(--doux); font-size: .82rem; }
+          .refus .carte b { font-size: 1.25rem; }
           .refus .carte b.non-nul { color: var(--alerte); }
           .boucles { display: grid; grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr)); }
           .boucles > * + * { border-top: none; }
-          .boucle { display: flex; align-items: center; gap: .6rem; padding: .7rem 1rem; font-size: .9rem; }
+          .boucle { display: flex; align-items: center; gap: .6rem; padding: .75rem 1.1rem; font-size: .92rem; }
           .boucle .doux { margin-left: auto; text-align: right; }
-          @media (min-width: 640px) { .boucles > * + * { border-left: 1px solid var(--bord); } }
+          @media (min-width: 640px) { .boucles > * + * { border-left: 1px solid var(--trait); } }
           .courbe { margin-top: .8rem; }
           .fenetres {
-            display: flex; gap: .25rem; align-items: center; margin: 0; border: none;
-            padding: .6rem 1.15rem;
+            display: flex; gap: .3rem; align-items: center; margin: 0; border: none;
+            padding: .6rem 1.2rem;
           }
-          .fenetres legend { float: left; margin-right: .6rem; padding: 0; font-size: .8rem; color: var(--doux); }
-          .fenetres label { position: relative; cursor: pointer; font-size: .85rem; }
+          .fenetres legend { float: left; margin-right: .6rem; padding: 0; font-size: .82rem; color: var(--doux); }
+          .fenetres label { position: relative; cursor: pointer; font-size: .85rem; font-weight: 700; }
           .fenetres label input { position: absolute; opacity: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; }
-          .fenetres label { display: inline-block; padding: .25rem .7rem; border: 1px solid var(--bord); border-radius: 6px; color: var(--doux); }
-          .fenetres label:has(input:checked) { border-color: var(--nacre); color: var(--nacre); background: rgba(211,189,146,.08); }
-          .fenetres label:has(input:focus-visible) { outline: 2px solid var(--nacre); outline-offset: 1px; }
+          .fenetres label { display: inline-block; padding: .25rem .8rem; border: 1px solid var(--bord); border-radius: 999px; color: var(--doux); }
+          .fenetres label:has(input:checked) { border-color: var(--nacre); color: var(--texte); background: rgba(95,180,255,.18); }
+          .fenetres label:has(input:focus-visible) { outline: 2px solid var(--texte); outline-offset: 2px; }
           .courbe svg { width: 100%; height: 56px; display: block; }
           .courbe .attente { display: flex; align-items: center; justify-content: center; height: 56px; }
           .courbe .attente[hidden] { display: none; }
@@ -103,63 +113,67 @@ public static class AdminPage
           table col.large { width: 45%; }
           table col.moyenne { width: 35%; }
           table col.actions { width: 20%; }
-          tbody tr:hover td { background: rgba(211,189,146,.04); }
+          thead th { background: rgba(4,11,38,.5); }
+          tbody tr:hover td { background: rgba(95,180,255,.06); }
           td { overflow: hidden; text-overflow: ellipsis; }
-          th { text-align: left; font-size: .72rem; text-transform: uppercase; letter-spacing: .08em; color: var(--doux); font-weight: 600; }
-          td, th { padding: .55rem .6rem; border-bottom: 1px solid var(--bord); vertical-align: middle; }
+          th { text-align: left; font-family: var(--display); font-size: .88rem; color: var(--doux); font-weight: 600; }
+          td, th { padding: .6rem .7rem; border-bottom: 1px solid var(--trait); vertical-align: middle; }
           tr:last-child td { border-bottom: none; }
           td.actions { text-align: right; white-space: nowrap; }
-          code { font-family: ui-monospace, SFMono-Regular, monospace; font-size: .85em; color: var(--doux); }
+          code { font-family: var(--mono); font-size: .84em; color: #cfe6ff; }
           button {
-            background: var(--creux); color: var(--texte); border: 1px solid var(--bord);
-            border-radius: 6px; padding: .32rem .75rem; cursor: pointer; font: inherit; font-size: .85rem;
-            transition: border-color .12s, color .12s;
+            background: rgba(95,180,255,.08); color: var(--texte); border: 1px solid var(--bord);
+            border-radius: 999px; padding: .34rem .9rem; cursor: pointer; font: inherit; font-size: .85rem; font-weight: 700;
+            transition: border-color .12s, color .12s, background .12s;
           }
-          button:hover { border-color: var(--nacre); color: var(--nacre); }
-          button.danger:hover { border-color: var(--alerte); color: var(--alerte); }
-          button.primaire { border-color: var(--nacre); color: var(--nacre); }
-          button:focus-visible, input:focus-visible { outline: 2px solid var(--nacre); outline-offset: 1px; }
+          button:hover { border-color: var(--nacre); background: rgba(95,180,255,.16); }
+          button.danger:hover { border-color: var(--alerte); color: var(--alerte); background: rgba(255,143,126,.1); }
+          button.primaire { background: var(--pom); color: #2a1300; border-color: var(--pom); font-weight: 800; }
+          button.primaire:hover { filter: brightness(1.08); background: var(--pom); }
+          button:disabled { opacity: .55; cursor: default; }
+          button:focus-visible, input:focus-visible { outline: 2px solid var(--texte); outline-offset: 2px; }
           input {
-            background: var(--creux); color: var(--texte); border: 1px solid var(--bord);
-            border-radius: 6px; padding: .4rem .65rem; font: inherit; font-size: .9rem; min-width: 0;
+            background: var(--field); color: var(--texte); border: 1px solid var(--bord);
+            border-radius: 12px; padding: .42rem .75rem; font: inherit; font-size: .9rem; min-width: 0;
           }
-          input::placeholder { color: #6f7583; }
+          input::placeholder { color: #6f7fb0; }
           select {
-            background: var(--creux); color: var(--texte); border: 1px solid var(--bord);
-            border-radius: 6px; padding: .4rem .65rem; font: inherit; font-size: .9rem; min-width: 0; max-width: 14rem;
+            background: var(--field); color: var(--texte); border: 1px solid var(--bord);
+            border-radius: 12px; padding: .42rem .75rem; font: inherit; font-size: .9rem; min-width: 0; max-width: 14rem;
           }
-          select:focus-visible { outline: 2px solid var(--nacre); outline-offset: 1px; }
+          select:focus-visible { outline: 2px solid var(--texte); outline-offset: 2px; }
           .bouton {
-            display: inline-block; background: var(--creux); color: var(--texte); border: 1px solid var(--bord);
-            border-radius: 6px; padding: .32rem .75rem; cursor: pointer; font-size: .85rem; text-decoration: none;
-            transition: border-color .12s, color .12s;
+            display: inline-block; background: rgba(95,180,255,.08); color: var(--texte); border: 1px solid var(--bord);
+            border-radius: 999px; padding: .34rem .9rem; cursor: pointer; font-size: .85rem; font-weight: 700; text-decoration: none;
+            transition: border-color .12s, background .12s;
           }
-          .bouton:hover { border-color: var(--nacre); color: var(--nacre); }
-          .bouton:focus-visible, .bouton:has(input:focus-visible) { outline: 2px solid var(--nacre); outline-offset: 1px; }
+          .bouton:hover { border-color: var(--nacre); background: rgba(95,180,255,.16); }
+          .bouton:focus-visible, .bouton:has(input:focus-visible) { outline: 2px solid var(--texte); outline-offset: 2px; }
           .outils { display: flex; flex-wrap: wrap; gap: .6rem; align-items: center; justify-content: space-between; }
-          .outils .filtre { display: flex; align-items: center; gap: .5rem; font-size: .8rem; color: var(--doux); }
+          .outils .filtre { display: flex; align-items: center; gap: .5rem; font-size: .82rem; color: var(--doux); }
           .actions-liste { display: flex; gap: .5rem; flex-wrap: wrap; }
           form { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
-          form label { display: flex; flex-direction: column; gap: .25rem; font-size: .72rem; color: var(--doux); }
+          form label { display: flex; flex-direction: column; gap: .25rem; font-size: .76rem; color: var(--doux); font-weight: 700; }
           .grille-reglages { display: grid; grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); gap: .8rem; align-items: end; }
           .grille-reglages input[type=number] { width: 100%; }
           .grille-reglages .interrupteur { flex-direction: row; align-items: center; gap: .5rem; font-size: .9rem; color: var(--texte); padding-bottom: .45rem; }
           .grille-reglages .interrupteur input { accent-color: var(--nacre); width: 1rem; height: 1rem; margin: 0; }
           input:invalid { border-color: var(--alerte); }
-          .vide { color: var(--doux); font-size: .88rem; font-style: italic; }
+          .vide { color: var(--doux); font-size: .9rem; font-style: italic; }
           .mise-en-garde {
-            display: flex; gap: .6rem; color: var(--doux); font-size: .85rem;
-            border-left: 2px solid var(--nacre); padding-left: .8rem;
+            display: flex; gap: .6rem; color: var(--doux); font-size: .88rem;
+            border-left: 3px solid var(--pom); padding-left: .85rem;
           }
           #toasts { position: fixed; right: 1.2rem; bottom: 1.2rem; display: flex; flex-direction: column; gap: .5rem; z-index: 10; }
           .toast {
-            background: var(--carte); border: 1px solid var(--bord); border-left: 3px solid var(--vert);
-            border-radius: 8px; padding: .6rem .9rem; font-size: .88rem; box-shadow: var(--ombre);
+            background: rgba(7,18,58,.95); border: 1px solid var(--bord); border-left: 3px solid var(--vert);
+            border-radius: 14px; padding: .6rem .95rem; font-size: .88rem; box-shadow: var(--ombre);
             animation: entree .18s ease-out;
           }
           .toast.rate { border-left-color: var(--alerte); }
           @keyframes entree { from { opacity: 0; transform: translateY(6px); } }
-          @media (max-width: 640px) { main { padding: 1.25rem 1rem 3rem; } .barre { padding: .8rem 1rem; } }
+          @media (prefers-reduced-motion: reduce) { .toast { animation: none; } }
+          @media (max-width: 640px) { main { padding: 1.25rem 1rem 3rem; } .barre { padding: .75rem 1rem; } }
         </style>
         </head>
         <body>
@@ -270,11 +284,13 @@ public static class AdminPage
             </h2>
             <div class="panneau">
               <p class="doux" style="margin:0 0 .5rem; overflow-wrap:anywhere" id="autoriteEtat"></p>
-              <table>
-                <colgroup><col class="large"><col class="moyenne"><col class="moyenne"><col class="actions"></colgroup>
-                <thead><tr><th>Service</th><th>Libellé</th><th>État</th><th></th></tr></thead>
-                <tbody id="autorite"></tbody>
-              </table>
+              <div>
+                <table>
+                  <colgroup><col class="large"><col class="moyenne"><col class="moyenne"><col class="actions"></colgroup>
+                  <thead><tr><th>Service</th><th>Libellé</th><th>État</th><th></th></tr></thead>
+                  <tbody id="autorite"></tbody>
+                </table>
+              </div>
             </div>
           </div>
 
@@ -486,13 +502,13 @@ public static class AdminPage
 
           const aire = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
           aire.setAttribute("points", "0,56 " + points + " 300,56");
-          aire.setAttribute("fill", "rgba(211,189,146,.12)");
+          aire.setAttribute("fill", "rgba(95,180,255,.14)");
           svg.appendChild(aire);
 
           const trait = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
           trait.setAttribute("points", points);
           trait.setAttribute("fill", "none");
-          trait.setAttribute("stroke", "#d3bd92");
+          trait.setAttribute("stroke", "#5fb4ff");
           trait.setAttribute("stroke-width", "1.5");
           trait.setAttribute("vector-effect", "non-scaling-stroke");
           svg.appendChild(trait);
