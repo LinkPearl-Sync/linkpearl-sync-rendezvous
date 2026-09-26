@@ -51,6 +51,14 @@ if (args.Contains("--help"))
                            donner avec --announce-to.
         --label            le nom qui s'affichera dans les annuaires.
 
+        --directory-authority  tient le rôle d'autorité du cercle ouvert : sonde
+                               les candidats, signe et sert la liste. Désactivé
+                               par défaut.
+        --directory-key        clé de signature de l'autorité (directory.key).
+                               Engendrée au premier démarrage ; ne jamais
+                               l'écraser ni la régénérer.
+        --authority-state      registre des probations (authority.json).
+
         --admin-port  port de la console d'administration. 47901 par défaut.
         --admin-allow qui la console sert. « local » par défaut, et il vaut mieux
                       l'y laisser : elle est en HTTP clair, donc le jeton
@@ -115,7 +123,25 @@ foreach (var target in ArgAll("--announce-to"))
 var settings = new SettingsStore(ArgString("--settings", "settings.json"));
 var limits = settings.Load(new RendezvousLimits { AnnouncementsPerMinute = rate }, Console.Out);
 var bans = new BanStore(ArgString("--bans", "bans.json"));
-var service = new RendezvousServer(port, directory, limits, clock, verbose: args.Contains("--verbose")) { Bans = bans };
+
+// L'autorité n'est qu'un rôle de ce même service, désactivé par défaut : un
+// service autohébergé n'en a pas l'usage, et le plugin n'accepterait de toute
+// façon que la liste signée par une clé qu'il connaît.
+AuthorityService? authority = null;
+
+if (args.Contains("--directory-authority"))
+{
+    var key = DirectoryKey.LoadOrCreate(ArgString("--directory-key", "directory.key"));
+    var ledger = AuthorityLedger.Load(ArgString("--authority-state", "authority.json"), clock);
+    authority = new AuthorityService(ledger, new ServiceProbe(), key, directory, clock);
+    Console.WriteLine($"Autorité du cercle ouvert, clé publique {Convert.ToHexStringLower(authority.PublicPoint)}.");
+}
+
+var service = new RendezvousServer(port, directory, limits, clock, verbose: args.Contains("--verbose"))
+{
+    Bans = bans,
+    Consensus = authority,
+};
 
 // La liste est chargée tout de suite, et non à la première requête : c'est ce
 // qui écrit le sel au premier démarrage, et un sel qui naîtrait plus tard
@@ -123,6 +149,9 @@ var service = new RendezvousServer(port, directory, limits, clock, verbose: args
 _ = bans.Current();
 
 var running = new List<Task> { service.RunAsync(stopping.Token) };
+
+if (authority is not null)
+    running.Add(authority.RunAsync(stopping.Token));
 
 if (args.Contains("--no-admin") is false)
 {

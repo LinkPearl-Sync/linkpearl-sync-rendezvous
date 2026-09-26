@@ -48,6 +48,9 @@ public sealed class PeerSession(TcpClient client) : IDisposable
     /// </remarks>
     public int BanPagesServed { get; set; }
 
+    /// <summary>Pages de liste signée servies sur cette connexion, bornées comme celles des bans.</summary>
+    public int ConsensusPagesServed { get; set; }
+
     public bool HasKey(string key) => _keys.ContainsKey(key);
 
     public void Remember(string key) => _keys[key] = 0;

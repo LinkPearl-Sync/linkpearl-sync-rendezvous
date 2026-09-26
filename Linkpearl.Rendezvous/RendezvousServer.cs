@@ -44,6 +44,9 @@ public sealed class RendezvousServer(
     /// <summary>La liste que le service publie ; nulle, il répond qu'il n'en a pas.</summary>
     public BanStore? Bans { get; init; }
 
+    /// <summary>La liste signée à servir, présente seulement sur une autorité.</summary>
+    public IConsensusSource? Consensus { get; init; }
+
     /// <summary>
     /// Une ligne de journal, avec ou sans son détail.
     /// </summary>
@@ -469,6 +472,7 @@ public sealed class RendezvousServer(
                     RendezvousKind.DirectoryQuery => await HandleDirectoryQueryAsync(session, ct).ConfigureAwait(false),
                     RendezvousKind.DirectorySubmit => HandleDirectorySubmit(session, frame),
                     RendezvousKind.BanListQuery => await HandleBanListQueryAsync(session, frame, ct).ConfigureAwait(false),
+                    RendezvousKind.ConsensusQuery => await HandleConsensusQueryAsync(session, frame, ct).ConfigureAwait(false),
                     _ => false,
                 };
 
@@ -566,6 +570,43 @@ public sealed class RendezvousServer(
             json is null ? RendezvousWire.Error("page hors de la liste") : RendezvousWire.BanListData(page, pages, json),
             ct).ConfigureAwait(false);
 
+        return true;
+    }
+
+    private async Task<bool> HandleConsensusQueryAsync(PeerSession session, byte[] frame, CancellationToken ct)
+    {
+        if (RendezvousWire.TryReadConsensusQuery(frame, out var page) is false)
+        {
+            await session.SendAsync(RendezvousWire.Error("demande de liste signée malformée"), ct).ConfigureAwait(false);
+            return false;
+        }
+
+        if (++session.ConsensusPagesServed > RendezvousWire.MaxConsensusPages)
+        {
+            await session.SendAsync(RendezvousWire.Error("trop de pages demandées"), ct).ConfigureAwait(false);
+            return false;
+        }
+
+        // Lu une fois par page : si l'autorité réémet entre deux pages, le
+        // client recolle deux versions, la signature échoue, et il garde sa
+        // liste jusqu'à la récupération suivante. Rien à verrouiller ici.
+        if (Consensus?.Document is not { } document)
+        {
+            await session.SendAsync(RendezvousWire.Error("ce service ne publie pas de liste signée"), ct).ConfigureAwait(false);
+            return true;
+        }
+
+        var size = RendezvousWire.ConsensusPageBytes;
+        var pages = Math.Max(1, (document.Length + size - 1) / size);
+
+        if (page >= pages)
+        {
+            await session.SendAsync(RendezvousWire.Error("page hors de la liste"), ct).ConfigureAwait(false);
+            return true;
+        }
+
+        var chunk = document.AsSpan(page * size, Math.Min(size, document.Length - page * size)).ToArray();
+        await session.SendAsync(RendezvousWire.ConsensusPage(page, pages, chunk), ct).ConfigureAwait(false);
         return true;
     }
 
