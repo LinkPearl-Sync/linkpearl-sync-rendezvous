@@ -87,6 +87,44 @@ public sealed class AnnouncerTests
     }
 
     [Fact]
+    public async Task Un_echec_est_retente_bien_avant_l_intervalle()
+    {
+        // L'autorité se présente à elle-même au démarrage, avant d'écouter :
+        // la première tentative échoue, et un jour d'attente la ferait
+        // disparaître du cercle jusqu'au lendemain.
+        var probe = new TcpListener(IPAddress.Loopback, 0);
+        probe.Start();
+        var port = ((IPEndPoint)probe.LocalEndpoint).Port;
+        probe.Stop();
+
+        using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var received = new TaskCompletionSource<DirectoryEntry>();
+
+        var announcing = Announcer.SubmitEveryAsync(
+            new RendezvousAddress("127.0.0.1", port), "rdv.candidat.ch", "", TimeSpan.FromDays(1), stop.Token,
+            retry: TimeSpan.FromMilliseconds(300));
+
+        await Task.Delay(100, stop.Token);
+        var listener = new TcpListener(IPAddress.Loopback, port);
+        listener.Start();
+        var directory = Task.Run(() => CountAsync(listener, entry => received.TrySetResult(entry), stop.Token));
+
+        Assert.Equal("rdv.candidat.ch", (await received.Task.WaitAsync(stop.Token)).Address);
+
+        await stop.CancelAsync();
+        await announcing;
+        listener.Stop();
+
+        try
+        {
+            await directory;
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
+
+    [Fact]
     public void Sans_consigne_le_service_se_presente_a_l_autorite_officielle()
         => Assert.Equal(["rdv.linkpearl.eorzea.events"], Announcer.Targets([], optOut: false));
 

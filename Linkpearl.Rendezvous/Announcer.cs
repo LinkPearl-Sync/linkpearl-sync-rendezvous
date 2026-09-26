@@ -25,6 +25,17 @@ public static class Announcer
     /// <summary>Intervalle entre deux candidatures.</summary>
     public static readonly TimeSpan Interval = TimeSpan.FromDays(1);
 
+    /// <summary>
+    /// Délai avant de retenter une candidature qui n'est pas partie.
+    /// </summary>
+    /// <remarks>
+    /// Une autorité se présente à elle-même avant d'écouter, et un service
+    /// démarre parfois avant son réseau : attendre l'intervalle entier le
+    /// tiendrait hors du cercle un jour de plus. Cinq minutes ne pèsent sur
+    /// personne, l'annuaire n'étant de toute façon pas joint.
+    /// </remarks>
+    public static readonly TimeSpan Retry = TimeSpan.FromMinutes(5);
+
     /// <summary>L'autorité du cercle ouvert, celle que le plugin connaît.</summary>
     public const string OfficialAuthority = "rdv.linkpearl.eorzea.events";
 
@@ -80,15 +91,16 @@ public static class Announcer
     /// jusqu'à l'arrêt du service.
     /// </summary>
     public static async Task SubmitEveryAsync(
-        RendezvousAddress to, string self, string label, TimeSpan interval, CancellationToken ct)
+        RendezvousAddress to, string self, string label, TimeSpan interval, CancellationToken ct,
+        TimeSpan? retry = null)
     {
         while (ct.IsCancellationRequested is false)
         {
-            await SubmitAsync(to, self, label, ct).ConfigureAwait(false);
+            var sent = await SubmitAsync(to, self, label, ct).ConfigureAwait(false);
 
             try
             {
-                await Task.Delay(interval, ct).ConfigureAwait(false);
+                await Task.Delay(sent ? interval : retry ?? Retry, ct).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
@@ -97,7 +109,8 @@ public static class Announcer
         }
     }
 
-    public static async Task SubmitAsync(
+    /// <returns>Vrai si la candidature est partie.</returns>
+    public static async Task<bool> SubmitAsync(
         RendezvousAddress to, string self, string label, CancellationToken ct)
     {
         try
@@ -115,10 +128,12 @@ public static class Announcer
             // Rien à lire en retour : l'annuaire ne répond pas, pour que cette
             // trame ne serve pas à sonder sa file d'attente.
             Console.WriteLine($"Candidature déposée auprès de {to}.");
+            return true;
         }
         catch (Exception e)
         {
             Console.WriteLine($"Candidature auprès de {to} impossible : {e.Message}");
+            return false;
         }
     }
 }
