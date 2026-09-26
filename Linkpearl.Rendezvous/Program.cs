@@ -10,6 +10,20 @@ using Linkpearl.Rendezvous;
 // README (« Ce qu'il ne voit pas ») et dans la conception du plugin,
 // docs/superpowers/specs/2026-09-22-linkpearl-design.md dans son dépôt.
 
+// Sous-commandes de la mise à jour, avant tout le reste : elles ne démarrent
+// pas le service.
+if (args is ["update"])
+{
+    Environment.ExitCode = await ReleaseCommands.UpdateAsync(Console.Out);
+    return;
+}
+
+if (args is ["release-sign", var signedVersion, var signedDirectory])
+{
+    Environment.ExitCode = ReleaseCommands.SignFromEnvironment(signedVersion, signedDirectory, Console.Out);
+    return;
+}
+
 var port = 47900;
 var rate = 60;
 var adminPort = 47901;
@@ -75,6 +89,9 @@ if (args.Contains("--help"))
         --bans        fichier de la liste de bannissement. bans.json par défaut.
         --settings    fichier des réglages changés depuis la console. settings.json
                       par défaut ; s'il existe, il surcharge --rate et les plafonds.
+
+        lprdv update  une ronde de mise à jour automatique, lancée en root
+                      par lprdv-update.timer.
         """);
     return;
 }
