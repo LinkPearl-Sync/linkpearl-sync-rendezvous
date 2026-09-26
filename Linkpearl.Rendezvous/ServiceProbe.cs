@@ -78,24 +78,6 @@ public sealed class ServiceProbe : IServiceProbe
         }
     }
 
-    public static bool IsPublic(IPAddress address)
-    {
-        if (address.IsIPv4MappedToIPv6)
-            address = address.MapToIPv4();
-
-        var bytes = address.GetAddressBytes();
-
-        if (address.AddressFamily == AddressFamily.InterNetwork)
-            return (bytes[0] is 0 or 10 or 127 or >= 224
-                || (bytes[0] == 100 && (bytes[1] & 0xC0) == 64)
-                || (bytes[0] == 169 && bytes[1] == 254)
-                || (bytes[0] == 172 && (bytes[1] & 0xF0) == 16)
-                || (bytes[0] == 192 && bytes[1] == 168)) is false;
-
-        // En IPv6, seul l'unicast global (2000::/3) est joignable d'Internet ;
-        // tout le reste est local, lien local, multicast ou réservé.
-        return address.AddressFamily == AddressFamily.InterNetworkV6
-            && (bytes[0] & 0xE0) == 0x20
-            && address.IsIPv6Multicast is false;
-    }
+    /// <summary>Le même filtre que le client applique aux lieux du cercle ouvert.</summary>
+    public static bool IsPublic(IPAddress address) => ServiceConsensus.IsPublicAddress(address);
 }
