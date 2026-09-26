@@ -3,7 +3,7 @@ using Linkpearl.Core.Abstractions;
 
 namespace Linkpearl.Rendezvous;
 
-public enum UpdateOutcome { Unversioned, Unreachable, Rejected, UpToDate, Refused, Waiting, Installed, RolledBack }
+public enum UpdateOutcome { Unversioned, Unreachable, Rejected, UpToDate, Refused, Waiting, Stopped, Installed, RolledBack }
 
 /// <summary>D'où viennent les releases : GitHub en service, un faux en test.</summary>
 public interface IReleaseSource
@@ -46,6 +46,14 @@ public sealed class Updater(
 
     private string RefusedPath => Path.Combine(stateDir, "refused");
 
+    /// <summary>
+    /// La version posée et pas encore confirmée par /healthz. Une ronde tuée
+    /// entre la pose et ce contrôle (redémarrage, disque plein) la laisse
+    /// derrière elle : la suivante, lancée par le nouveau binaire qui se croit
+    /// à jour, sait ainsi qu'elle doit encore vérifier.
+    /// </summary>
+    private string PendingPath => Path.Combine(stateDir, "pending");
+
     public async Task<UpdateOutcome> RunAsync(CancellationToken ct)
     {
         if (current is null)
@@ -53,6 +61,9 @@ public sealed class Updater(
             log.WriteLine("Version en place illisible (binaire compilé à la main ?) : pas de mise à jour automatique.");
             return UpdateOutcome.Unversioned;
         }
+
+        if (File.Exists(PendingPath) && await SettlePendingAsync(ct).ConfigureAwait(false) is { } settled)
+            return settled;
 
         string tag;
         byte[] manifestBytes, signature;
@@ -118,20 +129,82 @@ public sealed class Updater(
             return UpdateOutcome.Rejected;
         }
 
-        installation.Stage(binary, unit);
+        // Un service arrêté par son opérateur ne doit pas être relancé, et un
+        // service qui ne répond déjà plus (console sur un autre port, panne)
+        // ne dirait rien de la nouvelle version : dans les deux cas, on ne pose rien.
+        if (await installation.HealthyAsync(ct).ConfigureAwait(false) is false)
+        {
+            log.WriteLine($"Version {version} disponible, mais le service est arrêté ou ne répond pas : rien n'est posé.");
+            return UpdateOutcome.Stopped;
+        }
+
+        File.WriteAllText(PendingPath, version);
+
+        try
+        {
+            installation.Stage(binary, unit);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            // Le service tourne toujours sur l'ancien binaire : on remet les
+            // fichiers sans redémarrer, et l'opérateur doit le savoir.
+            log.WriteLine($"Version {version} : pose impossible ({e.Message}).");
+            TryRestore();
+            File.Delete(PendingPath);
+            return UpdateOutcome.Rejected;
+        }
 
         if (await RestartedAsync(ct).ConfigureAwait(false))
         {
             File.Delete(RefusedPath);
+            File.Delete(PendingPath);
             log.WriteLine($"Version {version} installée (depuis {current.ToString(3)}).");
             return UpdateOutcome.Installed;
         }
 
-        installation.Restore();
+        return await RollBackAsync(version, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>Tranche une pose laissée en suspens ; null si la ronde peut continuer.</summary>
+    private async Task<UpdateOutcome?> SettlePendingAsync(CancellationToken ct)
+    {
+        var version = File.ReadAllText(PendingPath).Trim();
+
+        if (await installation.HealthyAsync(ct).ConfigureAwait(false))
+        {
+            File.Delete(PendingPath);
+            log.WriteLine($"Version {version} confirmée après une ronde interrompue.");
+            return null;
+        }
+
+        log.WriteLine($"La pose de {version} a été interrompue et le service ne répond pas : retour arrière.");
+        return await RollBackAsync(version, ct).ConfigureAwait(false);
+    }
+
+    private async Task<UpdateOutcome> RollBackAsync(string version, CancellationToken ct)
+    {
+        if (TryRestore() is false)
+            return UpdateOutcome.Rejected;
+
         await RestartedAsync(ct).ConfigureAwait(false);
         File.WriteAllText(RefusedPath, version);
-        log.WriteLine($"Version {version} ne répond pas : retour à {current.ToString(3)}, elle ne sera pas retentée.");
+        File.Delete(PendingPath);
+        log.WriteLine($"Version {version} ne répond pas : retour à la précédente, elle ne sera pas retentée.");
         return UpdateOutcome.RolledBack;
+    }
+
+    private bool TryRestore()
+    {
+        try
+        {
+            installation.Restore();
+            return true;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            log.WriteLine($"Retour à la version précédente impossible : {e.Message}");
+            return false;
+        }
     }
 
     private async Task<bool> RestartedAsync(CancellationToken ct)

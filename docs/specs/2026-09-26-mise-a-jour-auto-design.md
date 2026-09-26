@@ -66,8 +66,9 @@ lprdv.release.json.sig   sa signature, ECDSA P-256, SHA-256, format IEEE P1363
   manifeste signé ne fait pas revenir en arrière.
 - `signed` : l'heure de signature, en secondes Unix. C'est elle qui compte
   pour le délai de garde, et non la date affichée par GitHub.
-- `urgent` : vrai si le message du tag annoté contient le mot `urgent`
-  (`git tag -a v0.6.1 -m "v0.6.1 urgent"`).
+- `urgent` : vrai si le message du tag annoté porte une ligne `urgent` seule
+  (`git tag -a v0.6.1 -m v0.6.1 -m urgent`). Ni un mot dans une phrase, ni
+  un tag léger, qui reprendrait le message du commit.
 - `files` : les sommes SHA-256 du binaire et de l'unité, les mêmes que dans
   `lprdv.sha256`, qui reste publié pour `install.sh` et le guide manuel.
 
@@ -137,6 +138,10 @@ permet son travail : écrire dans `/opt/lprdv`, `/etc/systemd/system` et
 | La nouvelle version ne répond pas | Retour à l'ancienne, version notée comme refusée |
 | La release est retirée pendant le délai de garde | Personne ne l'installe |
 | Coupure pendant la pose | Le renommage est atomique : l'ancien ou le nouveau binaire, jamais un mélange |
+| Ronde tuée entre la pose et /healthz (redémarrage, kill) | Le marqueur `/var/lib/lprdv-update/pending` fait vérifier la ronde suivante, qui défait la version si elle ne répond pas |
+| Pose impossible (disque plein) | Fichiers remis, pas de redémarrage, l'unité échoue pour prévenir l'opérateur |
+| Service arrêté par son opérateur, ou console qui ne répond pas | Rien n'est posé ni relancé |
+| Binaire compilé sans `-p:Version` | Il se dit `0.0.0-dev` : illisible, jamais mis à jour automatiquement |
 
 ## Vérification
 

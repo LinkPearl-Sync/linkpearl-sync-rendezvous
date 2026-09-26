@@ -75,8 +75,8 @@ LPRDV_HOST=debian@rdv.linkpearl.eorzea.events LPRDV_KEY=~/.ssh/linkpearl_rdv ./d
   l'environnement GitHub `release`. Ne jamais l'écraser ni la régénérer : la perdre oblige
   à publier une release signée par une autre clé déjà inscrite, sans quoi plus aucun
   serveur ne se met à jour seul.
-- Publier une correction urgente : `git tag -a vX.Y.Z -m "vX.Y.Z urgent"`, qui lève le
-  délai de garde de 24 heures.
+- Publier une correction urgente : `git tag -a vX.Y.Z -m vX.Y.Z -m urgent` (une ligne
+  `urgent` seule, dans un tag annoté), qui lève le délai de garde de 24 heures.
 - Vérifier de l'extérieur depuis le dépôt du plugin : lancer en parallèle
   `dotnet run --project Linkpearl.Harness -c Release -- rdv rdv.linkpearl.eorzea.events 47900 alice`
   et la même avec `bob`. Les deux doivent finir par « TOUT EST PASSÉ ».

@@ -5,6 +5,10 @@
     <TargetFramework>net10.0</TargetFramework>
     <RootNamespace>Linkpearl.Rendezvous</RootNamespace>
     <AssemblyName>lprdv</AssemblyName>
+    <!-- Un binaire compilé sans -p:Version se dit en développement : la mise à
+         jour automatique l'ignore au lieu de le croire en 1.0.0 et de
+         l'écraser à la première release plus récente. -->
+    <Version>0.0.0-dev</Version>
     <InvariantGlobalization>true</InvariantGlobalization>
   </PropertyGroup>
 

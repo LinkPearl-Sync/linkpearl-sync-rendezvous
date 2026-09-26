@@ -66,8 +66,8 @@ arrivé au premier déploiement public. `journalctl -u lprdv` donne le journal.
 Les serveurs installés par `install.sh` (site) se mettent à jour seuls : `lprdv-update.timer`
 lance `lprdv update` chaque heure. Une release n'est installée que si son manifeste
 `lprdv.release.json` porte une signature d'une clé de `ReleaseKeys.cs`, et seulement 24 heures
-après sa signature, sauf si le message du tag annoté contient `urgent`
-(`git tag -a v0.6.1 -m "v0.6.1 urgent"`). Une version qui ne répond pas sur `/healthz` est
+après sa signature, sauf si le message du tag annoté porte une ligne `urgent` seule
+(`git tag -a v0.6.1 -m v0.6.1 -m urgent`). Une version qui ne répond pas sur `/healthz` est
 défaite et n'est plus retentée. Retirer une release pendant les 24 heures (la supprimer, ou la
 passer en pré-version) suffit à ce que personne ne l'installe. La production n'a pas de
 minuteur : `deploy.sh` la met à jour, et elle essuie chaque version la première.

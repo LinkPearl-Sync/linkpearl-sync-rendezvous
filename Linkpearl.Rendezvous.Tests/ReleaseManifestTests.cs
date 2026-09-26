@@ -61,4 +61,10 @@ public sealed class ReleaseManifestTests
         manifest[^2] ^= 1;
         Assert.False(ReleaseManifest.Verify(manifest, signature, [ServiceConsensus.PublicPoint(key)]));
     }
+
+    [Fact]
+    public void Un_binaire_compile_sans_version_ne_se_lit_pas()
+        // Les tests tournent sur un binaire compilé sans -p:Version, comme un
+        // binaire fait à la main : la mise à jour automatique doit l'ignorer.
+        => Assert.Null(ReleaseVersion.Current);
 }

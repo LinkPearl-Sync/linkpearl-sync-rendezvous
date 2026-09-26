@@ -88,11 +88,16 @@ jobs:
           VERSION: ${{ steps.tag.outputs.VERSION }}
           TAG: ${{ github.ref_name }}
           LPRDV_RELEASE_KEY: ${{ secrets.LPRDV_RELEASE_KEY }}
-        # « urgent » dans le message du tag annoté lève le délai de garde. Le
-        # checkout ne rapporte pas l'objet du tag : on va le chercher.
+        # Une ligne « urgent », seule, dans le message du tag annoté lève le
+        # délai de garde (git tag -a vX.Y.Z -m vX.Y.Z -m urgent). Ni un mot
+        # dans une phrase (« rien d'urgent »), ni un tag léger, qui reprendrait
+        # le message du commit. Le checkout ne rapporte pas l'objet du tag : on
+        # va le chercher.
         run: |
           git fetch --force origin "refs/tags/$TAG:refs/tags/$TAG"
-          if git tag -l --format='%(contents)' "$TAG" | grep -qiw urgent; then export LPRDV_URGENT=true; fi
+          if [ "$(git cat-file -t "$TAG")" = tag ] && git tag -l --format='%(contents)' "$TAG" | grep -qx urgent; then
+            export LPRDV_URGENT=true
+          fi
           ./out/lprdv release-sign "$VERSION" out
 
       - name: Publier la version

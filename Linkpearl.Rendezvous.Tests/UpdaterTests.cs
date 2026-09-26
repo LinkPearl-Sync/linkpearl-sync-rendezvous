@@ -42,10 +42,21 @@ public sealed class UpdaterTests : IDisposable
         public byte[]? Staged { get; private set; }
         public bool Restored { get; private set; }
         public bool Healthy { get; set; } = true;
+        public bool HealthyBefore { get; set; } = true;
         public bool RestartFails { get; set; }
+        public bool StageFails { get; set; }
+        public Action? OnStage { get; set; }
         public int Restarts { get; private set; }
 
-        public void Stage(byte[] binary, byte[] unit) => Staged = binary;
+        public void Stage(byte[] binary, byte[] unit)
+        {
+            OnStage?.Invoke();
+
+            if (StageFails)
+                throw new IOException("disque plein");
+
+            Staged = binary;
+        }
 
         public Task RestartAsync(CancellationToken ct)
         {
@@ -53,7 +64,8 @@ public sealed class UpdaterTests : IDisposable
             return RestartFails && Restored is false ? throw new InvalidOperationException("systemctl") : Task.CompletedTask;
         }
 
-        public Task<bool> HealthyAsync(CancellationToken ct) => Task.FromResult(Healthy);
+        /// <summary>Avant toute pose, l'état du service en place ; après, celui de la version posée.</summary>
+        public Task<bool> HealthyAsync(CancellationToken ct) => Task.FromResult(Staged is null && Restored is false ? HealthyBefore : Healthy);
 
         public void Restore() => Restored = true;
     }
@@ -192,5 +204,67 @@ public sealed class UpdaterTests : IDisposable
 
         Assert.Equal(UpdateOutcome.RolledBack, await Updater().RunAsync(CancellationToken.None));
         Assert.True(_installation.Restored);
+    }
+
+    private string Pending => Path.Combine(_state, "pending");
+
+    [Fact]
+    public async Task Un_service_arrete_n_est_ni_mis_a_jour_ni_relance()
+    {
+        Publish("0.6.0", TimeSpan.FromHours(25));
+        _installation.HealthyBefore = false;
+
+        Assert.Equal(UpdateOutcome.Stopped, await Updater().RunAsync(CancellationToken.None));
+        Assert.Null(_installation.Staged);
+        Assert.Equal(0, _installation.Restarts);
+    }
+
+    [Fact]
+    public async Task La_pose_est_marquee_en_cours_puis_confirmee()
+    {
+        Publish("0.6.0", TimeSpan.FromHours(25));
+        var marked = false;
+        _installation.OnStage = () => marked = File.Exists(Pending);
+
+        Assert.Equal(UpdateOutcome.Installed, await Updater().RunAsync(CancellationToken.None));
+        Assert.True(marked);
+        Assert.False(File.Exists(Pending));
+    }
+
+    [Fact]
+    public async Task Une_pose_interrompue_qui_ne_repond_pas_est_defaite_a_la_ronde_suivante()
+    {
+        // La ronde précédente a été tuée entre la pose et /healthz : c'est la
+        // nouvelle version qui lance celle-ci, et elle ne répond pas.
+        File.WriteAllText(Pending, "0.6.0");
+        _installation.HealthyBefore = false;
+
+        Assert.Equal(UpdateOutcome.RolledBack, await Updater("0.6.0").RunAsync(CancellationToken.None));
+        Assert.True(_installation.Restored);
+        Assert.Equal("0.6.0", File.ReadAllText(Path.Combine(_state, "refused")));
+        Assert.False(File.Exists(Pending));
+    }
+
+    [Fact]
+    public async Task Une_pose_interrompue_mais_saine_est_confirmee()
+    {
+        File.WriteAllText(Pending, "0.6.0");
+        Publish("0.6.0", TimeSpan.FromHours(25));
+
+        Assert.Equal(UpdateOutcome.UpToDate, await Updater("0.6.0").RunAsync(CancellationToken.None));
+        Assert.False(_installation.Restored);
+        Assert.False(File.Exists(Pending));
+    }
+
+    [Fact]
+    public async Task Une_pose_qui_echoue_remet_les_fichiers_sans_redemarrer()
+    {
+        Publish("0.6.0", TimeSpan.FromHours(25));
+        _installation.StageFails = true;
+
+        Assert.Equal(UpdateOutcome.Rejected, await Updater().RunAsync(CancellationToken.None));
+        Assert.True(_installation.Restored);
+        Assert.Equal(0, _installation.Restarts);
+        Assert.False(File.Exists(Pending));
     }
 }
