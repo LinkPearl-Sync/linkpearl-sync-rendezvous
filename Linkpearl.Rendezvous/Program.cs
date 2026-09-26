@@ -45,7 +45,9 @@ if (args.Contains("--help"))
     Console.WriteLine("""
         Service de rendez-vous Linkpearl.
 
-          lprdv [--port 47900] [--rate 60]
+          lprdv [--port 47900] [--rate 60] [options]
+          lprdv update
+          lprdv release-sign VERSION DOSSIER   (workflow de release, clé dans LPRDV_RELEASE_KEY)
 
         --port  port TCP et UDP. 443 est un choix raisonnable pour les réseaux
                 restrictifs, la charge utile étant de toute façon chiffrée de

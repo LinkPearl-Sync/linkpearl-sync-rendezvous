@@ -5,8 +5,8 @@
 #   LPRDV_KEY=~/.ssh/ma_cle        clé SSH, facultative
 #
 # Le compte distant a besoin de sudo. Le script est rejouable : il crée le
-# compte lprdv et installe l'unité au premier passage, et se contente ensuite
-# de remplacer le binaire et de redémarrer.
+# compte lprdv au premier passage, et chaque passage repose le binaire,
+# l'unité générique et le complément production.conf, puis redémarre.
 set -euo pipefail
 
 : "${LPRDV_HOST:?LPRDV_HOST=utilisateur@hôte manquant}"

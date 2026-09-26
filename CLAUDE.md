@@ -87,6 +87,8 @@ LPRDV_HOST=debian@rdv.linkpearl.eorzea.events LPRDV_KEY=~/.ssh/linkpearl_rdv ./d
 
 Publier une version : `git tag -a vX.Y.Z -m vX.Y.Z` sur `main`, puis pousser le tag.
 `.github/workflows/release.yml` vérifie (build sans warning, tests), compile le binaire
-autonome et publie la release avec `lprdv` et `lprdv.sha256`. Un suffixe (`v0.3.0-rc1`)
+autonome, signe le manifeste de mise à jour et publie la release avec `lprdv`, `lprdv.service`,
+`lprdv-update.service`, `lprdv-update.timer`, `lprdv.sha256`, `lprdv.release.json` et sa
+signature. Un suffixe (`v0.3.0-rc1`)
 en fait une pré-version. Le workflow ne déploie pas : aucun secret SSH dans le dépôt,
 `deploy.sh` reste lancé à la main.
