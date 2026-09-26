@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Sockets;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json.Nodes;
 using Linkpearl.Core.Safety;
@@ -59,12 +60,23 @@ public sealed class AdminServerTests : IAsyncLifetime
 
         _settings = new SettingsStore(Path.Combine(_dir, "settings.json"));
 
+        var clock = new ManualClock();
+        _authority = new AuthorityService(
+            AuthorityLedger.Load(Path.Combine(_dir, "authority.json"), clock), new ScriptedProbe(),
+            ECDsa.Create(ECCurve.NamedCurves.nistP256), _directory, clock)
+        {
+            Log = TextWriter.Null,
+        };
+
         _running = new AdminServer(localOnly: true, port, servicePort, _token, _service, _directory, _bans, _settings, new ManualClock())
             {
                 Log = _log,
+                Authority = _authority,
             }
             .RunAsync(_stopping.Token);
     }
+
+    private AuthorityService _authority = null!;
 
     private SettingsStore _settings = null!;
     private readonly StringWriter _log = new();
@@ -650,6 +662,56 @@ public sealed class AdminServerTests : IAsyncLifetime
     [Fact]
     public void Ouverte_a_tous_elle_ne_filtre_plus()
         => Assert.True(AdminServer.Serves(localOnly: false, IPAddress.Parse("192.168.1.20")));
+
+    [Fact]
+    public async Task L_etat_montre_la_cle_de_l_autorite()
+    {
+        var response = await SendAsync(HttpMethod.Get, "/api/status");
+        var body = await response.Content.ReadAsStringAsync();
+
+        Assert.Contains(Convert.ToHexStringLower(_authority.PublicPoint), body);
+    }
+
+    [Fact]
+    public async Task Ecarter_un_service_suivi_le_retire_du_cercle()
+    {
+        _authority.Ledger.Track(new DirectoryEntry("rdv.suspect.ch", "Suspect"));
+
+        var response = await SendAsync(HttpMethod.Post, "/api/authority/veto", body: """{"address":"rdv.suspect.ch"}""");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(ServiceStanding.Vetoed, _authority.Ledger.Snapshot().Single().Standing);
+    }
+
+    [Fact]
+    public async Task Ecarter_un_service_inconnu_rend_404()
+    {
+        var response = await SendAsync(HttpMethod.Post, "/api/authority/veto", body: """{"address":"rdv.inconnu.ch"}""");
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Retablir_un_service_ecarte_le_rend_candidat()
+    {
+        _authority.Ledger.Track(new DirectoryEntry("rdv.suspect.ch", "Suspect"));
+        _authority.Ledger.Veto("rdv.suspect.ch");
+
+        var response = await SendAsync(HttpMethod.Delete, "/api/authority/veto", body: """{"address":"rdv.suspect.ch"}""");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(ServiceStanding.Candidate, _authority.Ledger.Snapshot().Single().Standing);
+    }
+
+    [Fact]
+    public async Task Ecarter_sans_jeton_est_refuse()
+    {
+        var response = await SendAsync(
+            HttpMethod.Post, "/api/authority/veto", body: """{"address":"rdv.suspect.ch"}""", token: new string('0', 64));
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        Assert.Empty(_authority.Ledger.Snapshot());
+    }
 
     private static int FreePort()
     {

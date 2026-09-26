@@ -44,6 +44,9 @@ public sealed class AdminServer(
     /// <summary>Où la console écrit ce qu'elle change. Jamais d'adresse ni de nom.</summary>
     public TextWriter Log { get; init; } = Console.Out;
 
+    /// <summary>L'autorité du cercle ouvert, si ce service en tient le rôle.</summary>
+    public AuthorityService? Authority { get; init; }
+
     /// <summary>
     /// Au-delà, un import est refusé sans être lu.
     /// </summary>
@@ -386,6 +389,26 @@ public sealed class AdminServer(
                 return;
             }
 
+            case ("/api/authority/veto", "POST"):
+            case ("/api/authority/veto", "DELETE"):
+            {
+                var body = await BodyAsync(context).ConfigureAwait(false);
+                var address = body?["address"]?.GetValue<string>() ?? "";
+                var veto = method is "POST";
+                var done = Authority is { } authority && (veto ? authority.Ledger.Veto(address) : authority.Ledger.Lift(address));
+
+                if (done)
+                {
+                    // Réémise aussitôt : un service écarté ne doit pas rester
+                    // servi jusqu'à la ronde suivante.
+                    Authority!.IssueIfNeeded();
+                    Log.WriteLine(veto ? $"Service écarté du cercle ouvert : {address}." : $"Service rétabli : {address}.");
+                }
+
+                Respond(context, done ? 200 : 404, "application/json", Result(done, address));
+                return;
+            }
+
             default:
                 Respond(context, 404, "application/json", """{"error":"point d'entrée inconnu"}""");
                 return;
@@ -468,9 +491,38 @@ public sealed class AdminServer(
             ["known"] = known,
             ["pending"] = pending,
             ["bans"] = banned,
+            ["authority"] = Authority is null ? null : AuthorityStatus(Authority),
         };
 
         return document.ToJsonString();
+    }
+
+    private static JsonObject AuthorityStatus(AuthorityService authority)
+    {
+        var current = authority.Current;
+        var services = new JsonArray();
+
+        foreach (var service in authority.Ledger.Snapshot())
+            services.Add(new JsonObject
+            {
+                ["address"] = service.Address,
+                ["label"] = service.Label,
+                ["standing"] = service.Standing.ToString(),
+                ["probes"] = service.Probes,
+                ["successes"] = service.Successes,
+                ["lastSuccess"] = service.LastSuccess?.ToUnixTimeSeconds(),
+                ["probationStart"] = service.ProbationStart?.ToUnixTimeSeconds(),
+                ["listedAt"] = service.ListedAt?.ToUnixTimeSeconds(),
+            });
+
+        return new JsonObject
+        {
+            ["publicKey"] = Convert.ToHexStringLower(authority.PublicPoint),
+            ["version"] = current?.Version,
+            ["issued"] = current?.Issued,
+            ["expires"] = current?.Expires,
+            ["services"] = services,
+        };
     }
 
     private string HistoryJson(int minutes)

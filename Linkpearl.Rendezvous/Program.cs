@@ -159,7 +159,10 @@ if (args.Contains("--no-admin") is false)
 {
     var token = AdminToken.LoadOrCreate(ArgString("--admin-token", "admin.token"));
     var admin = new AdminServer(
-        ArgString("--admin-allow", "local") is not "any", adminPort, port, token, service, directory, bans, settings, clock);
+        ArgString("--admin-allow", "local") is not "any", adminPort, port, token, service, directory, bans, settings, clock)
+    {
+        Authority = authority,
+    };
 
     running.Add(admin.RunAsync(stopping.Token));
 }

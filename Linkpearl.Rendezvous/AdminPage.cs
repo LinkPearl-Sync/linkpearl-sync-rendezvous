@@ -263,6 +263,21 @@ public static class AdminPage
             </div>
           </div>
 
+          <div id="autoriteSection" hidden>
+            <h2>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/></svg>
+              Cercle ouvert <span class="compte" id="compteAutorite"></span>
+            </h2>
+            <div class="panneau">
+              <p class="doux" style="margin:0 0 .5rem; overflow-wrap:anywhere" id="autoriteEtat"></p>
+              <table>
+                <colgroup><col class="large"><col class="moyenne"><col class="moyenne"><col class="actions"></colgroup>
+                <thead><tr><th>Service</th><th>Libellé</th><th>État</th><th></th></tr></thead>
+                <tbody id="autorite"></tbody>
+              </table>
+            </div>
+          </div>
+
           <h2>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M9 12l2 2 4-4"/></svg>
             Bannissements <span class="compte" id="compteBans"></span>
@@ -502,6 +517,12 @@ public static class AdminPage
           return b;
         }
 
+        function etatAutorite(p) {
+          const noms = { Candidate: "candidat", Probation: "en probation", Listed: "listé", Delisted: "sorti", Vetoed: "écarté" };
+          const ratio = p.probes ? " (" + Math.round(100 * p.successes / p.probes) + " %)" : "";
+          return noms[p.standing] + ratio;
+        }
+
         function remplir(corps, lignes, rien) {
           corps.replaceChildren();
           if (lignes.length === 0) {
@@ -594,6 +615,25 @@ public static class AdminPage
             p.address, p.label || "",
             bouton("approuver", false, () => agir("/api/peers", "POST", { address: p.address }, p.address + " ajouté à l'annuaire"))
           ])), "aucune candidature. Un service qui s'annonce avec --announce-to apparaît ici.");
+
+          const a = s.authority;
+          $("autoriteSection").hidden = !a;
+          if (a) {
+            const listes = a.services.filter(p => p.standing === "Listed").length;
+            $("compteAutorite").textContent = listes + (listes > 1 ? " services listés" : " service listé");
+            $("autoriteEtat").textContent = "Clé publique " + a.publicKey + (a.version
+              ? " · version " + a.version + ", valable jusqu'au " + new Date(a.expires * 1000).toLocaleString()
+              : " · aucune liste émise");
+            remplir($("autorite"), a.services.map(p => ligne([
+              p.address, p.label || "", etatAutorite(p),
+              p.standing === "Vetoed"
+                ? bouton("rétablir", false, () => agir("/api/authority/veto", "DELETE", { address: p.address }, p.address + " rétabli"))
+                : bouton("écarter", true, () => {
+                    if (confirm("Écarter " + p.address + " du cercle ouvert ?"))
+                      return agir("/api/authority/veto", "POST", { address: p.address }, p.address + " écarté");
+                  })
+            ])), "aucun service suivi. Une candidature reçue par --announce-to apparaît ici après la prochaine sonde.");
+          }
 
           bansCourants = s.bans;
           afficherBans();
