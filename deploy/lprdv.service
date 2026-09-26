@@ -18,7 +18,7 @@ Type=simple
 User=lprdv
 Group=lprdv
 WorkingDirectory=/var/lib/lprdv
-ExecStart=/opt/lprdv/lprdv --port 47900
+ExecStart=/opt/lprdv/lprdv --port 47900 --directory-authority
 Restart=always
 RestartSec=5
 # Sans plafond, un tas .NET mal borné prendrait la mémoire du VPS entier.
