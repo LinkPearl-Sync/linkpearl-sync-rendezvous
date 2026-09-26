@@ -63,7 +63,7 @@ public sealed class AdminServerTests : IAsyncLifetime
         var clock = new ManualClock();
         _authority = new AuthorityService(
             AuthorityLedger.Load(Path.Combine(_dir, "authority.json"), clock), new ScriptedProbe(),
-            ECDsa.Create(ECCurve.NamedCurves.nistP256), _directory, clock)
+            ECDsa.Create(ECCurve.NamedCurves.nistP256), clock)
         {
             Log = TextWriter.Null,
         };
@@ -675,7 +675,7 @@ public sealed class AdminServerTests : IAsyncLifetime
     [Fact]
     public async Task Ecarter_un_service_suivi_le_retire_du_cercle()
     {
-        _authority.Ledger.Track(new DirectoryEntry("rdv.suspect.ch", "Suspect"));
+        _authority.Ledger.Track(new DirectoryEntry("rdv.suspect.ch", "Suspect"), "203.0.113.9");
 
         var response = await SendAsync(HttpMethod.Post, "/api/authority/veto", body: """{"address":"rdv.suspect.ch"}""");
 
@@ -694,7 +694,7 @@ public sealed class AdminServerTests : IAsyncLifetime
     [Fact]
     public async Task Retablir_un_service_ecarte_le_rend_candidat()
     {
-        _authority.Ledger.Track(new DirectoryEntry("rdv.suspect.ch", "Suspect"));
+        _authority.Ledger.Track(new DirectoryEntry("rdv.suspect.ch", "Suspect"), "203.0.113.9");
         _authority.Ledger.Veto("rdv.suspect.ch");
 
         var response = await SendAsync(HttpMethod.Delete, "/api/authority/veto", body: """{"address":"rdv.suspect.ch"}""");

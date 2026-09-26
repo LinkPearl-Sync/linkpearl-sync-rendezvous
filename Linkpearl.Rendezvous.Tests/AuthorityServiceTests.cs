@@ -28,15 +28,13 @@ public sealed class AuthorityServiceTests : IDisposable
     private readonly ManualClock _clock = new();
     private readonly ScriptedProbe _probe = new();
     private readonly ECDsa _key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
-    private readonly PeerDirectory _directory;
     private readonly AuthorityService _authority;
 
     public AuthorityServiceTests()
     {
         Directory.CreateDirectory(_dir);
-        _directory = new PeerDirectory(Path.Combine(_dir, "peers.txt"), Path.Combine(_dir, "pending.txt"), _clock);
         _authority = new AuthorityService(
-            AuthorityLedger.Load(Path.Combine(_dir, "authority.json"), _clock), _probe, _key, _directory, _clock)
+            AuthorityLedger.Load(Path.Combine(_dir, "authority.json"), _clock), _probe, _key, _clock)
         {
             Log = TextWriter.Null,
         };
@@ -51,7 +49,8 @@ public sealed class AuthorityServiceTests : IDisposable
     [Fact]
     public async Task Une_candidature_est_sondee_puis_listee_apres_la_probation()
     {
-        _directory.Submit("198.51.100.1", new DirectoryEntry("rdv.candidat.ch", "Candidat"));
+        // La candidature vient de l'adresse même où le service répond.
+        _authority.Ledger.Track(new DirectoryEntry("rdv.candidat.ch", "Candidat"), "203.0.113.7");
         _probe.Up["rdv.candidat.ch:47900"] = IPAddress.Parse("203.0.113.7");
 
         for (var round = 0; round <= 432; round++)
@@ -79,6 +78,21 @@ public sealed class AuthorityServiceTests : IDisposable
         _clock.Advance(TimeSpan.FromHours(1));
         _authority.IssueIfNeeded();
         Assert.True(_authority.Current!.Version > first);
+    }
+
+    [Fact]
+    public async Task Une_candidature_recue_porte_l_adresse_qui_l_a_soumise()
+    {
+        var received = new TaskCompletionSource<(DirectoryEntry Entry, string Submitter)>();
+        await using var harness = await ServerHarness.StartAsync(
+            candidacy: (entry, submitter) => received.TrySetResult((entry, submitter)));
+        using var client = await harness.ConnectAsync();
+
+        await client.SendAsync(RendezvousWire.DirectorySubmit("rdv.candidat.ch", "Candidat"));
+        var (entry, submitter) = await received.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal("rdv.candidat.ch", entry.Address);
+        Assert.Equal("127.0.0.1", submitter);
     }
 
     [Fact]

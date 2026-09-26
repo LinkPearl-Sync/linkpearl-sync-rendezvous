@@ -135,7 +135,7 @@ if (args.Contains("--directory-authority"))
 {
     var key = DirectoryKey.LoadOrCreate(ArgString("--directory-key", "directory.key"));
     var ledger = AuthorityLedger.Load(ArgString("--authority-state", "authority.json"), clock);
-    authority = new AuthorityService(ledger, new ServiceProbe(), key, directory, clock);
+    authority = new AuthorityService(ledger, new ServiceProbe(), key, clock);
     Console.WriteLine($"Autorité du cercle ouvert, clé publique {Convert.ToHexStringLower(authority.PublicPoint)}.");
 }
 
@@ -143,6 +143,7 @@ var service = new RendezvousServer(port, directory, limits, clock, verbose: args
 {
     Bans = bans,
     Consensus = authority,
+    Candidacy = authority is null ? null : (entry, submitter) => authority.Ledger.Track(entry, submitter),
 };
 
 // La liste est chargée tout de suite, et non à la première requête : c'est ce

@@ -20,7 +20,7 @@ public interface IConsensusSource
 /// reste composé à la main par chaque utilisateur.
 /// </remarks>
 public sealed class AuthorityService(
-    AuthorityLedger ledger, IServiceProbe probe, ECDsa key, PeerDirectory directory, IClock clock) : IConsensusSource
+    AuthorityLedger ledger, IServiceProbe probe, ECDsa key, IClock clock) : IConsensusSource
 {
     public static readonly TimeSpan Interval = TimeSpan.FromMinutes(10);
 
@@ -87,9 +87,6 @@ public sealed class AuthorityService(
 
     public async Task RoundAsync(CancellationToken ct)
     {
-        foreach (var entry in directory.Pending().Concat(directory.Known()))
-            ledger.Track(entry);
-
         var targets = ledger.Snapshot()
             .Where(service => service.Standing is not ServiceStanding.Vetoed)
             .Select(service => service.Address)

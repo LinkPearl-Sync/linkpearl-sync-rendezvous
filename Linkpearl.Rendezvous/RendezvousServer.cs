@@ -48,6 +48,11 @@ public sealed class RendezvousServer(
     public IConsensusSource? Consensus { get; init; }
 
     /// <summary>
+    /// Ce qui reçoit une candidature et l'adresse qui l'a soumise, sur une autorité.
+    /// </summary>
+    public Action<DirectoryEntry, string>? Candidacy { get; init; }
+
+    /// <summary>
     /// Une ligne de journal, avec ou sans son détail.
     /// </summary>
     /// <remarks>
@@ -531,7 +536,10 @@ public sealed class RendezvousServer(
     private bool HandleDirectorySubmit(PeerSession session, byte[] frame)
     {
         if (RendezvousWire.TryReadDirectory(frame, out var submitted, out _) && submitted.Count is 1)
+        {
             directory.Submit(session.Bucket, submitted[0]);
+            Candidacy?.Invoke(submitted[0], session.Bucket);
+        }
 
         return true;
     }

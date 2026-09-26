@@ -204,8 +204,10 @@ Avec `--directory-authority`, le service tient en plus le rôle d'autorité du c
 Il est désactivé par défaut : un service autohébergé n'en a pas l'usage, et le plugin
 n'accepterait de toute façon que la liste signée par une clé qu'il connaît.
 
-L'autorité sonde toutes les dix minutes les candidats reçus par `--announce-to` et les
-services de `peers.txt`, jamais une adresse non publique. Un candidat entre dans la liste
+L'autorité sonde toutes les dix minutes les candidats reçus par `--announce-to`, jamais une
+adresse non publique. Une candidature est liée à l'adresse qui l'a envoyée : le service
+n'entre que s'il répond depuis cette adresse (ou ce /64), pour que personne n'inscrive le
+service d'un autre. `peers.txt` reste l'annuaire manuel et n'est pas sondé. Un candidat entre dans la liste
 après 72 heures à au moins 95 % de sondes réussies, en sort après 24 heures de silence,
 reprend sa place s'il revient dans les 72 heures, et est oublié après 7 jours sans
 réponse. Au plus deux services par /24 ou /48, et cinq admissions par jour. La liste est

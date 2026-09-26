@@ -69,7 +69,13 @@ public sealed class AuthorityLedger
         return ledger;
     }
 
-    public bool Track(DirectoryEntry entry)
+    /// <summary>Suit une candidature, liée à l'adresse (ou au /64) qui l'a soumise.</summary>
+    /// <remarks>
+    /// Un service n'entre que s'il répond depuis cette adresse-là : sans ce
+    /// lien, n'importe qui inscrirait au cercle ouvert le service d'un autre,
+    /// ou l'alias d'un service d'ancrage, sans l'accord de son opérateur.
+    /// </remarks>
+    public bool Track(DirectoryEntry entry, string submitter)
     {
         if (KeyOf(entry.Address) is not { } key)
             return false;
@@ -79,7 +85,7 @@ public sealed class AuthorityLedger
             if (_services.ContainsKey(key) || _services.Count >= MaxTracked)
                 return false;
 
-            _services[key] = new Service { Address = key, Label = entry.Label, FirstSeen = _clock.UtcNow };
+            _services[key] = new Service { Address = key, Label = entry.Label, Submitter = submitter, FirstSeen = _clock.UtcNow };
             return true;
         }
     }
@@ -96,7 +102,12 @@ public sealed class AuthorityLedger
 
             var now = _clock.UtcNow;
 
-            if (result is { Reached: true, Address: { } reachedAt })
+            // Une réponse venue d'ailleurs que de l'adresse candidate ne compte
+            // pas : ce n'est pas ce service-là qui s'est porté candidat.
+            var reached = result is { Reached: true, Address: { } answered }
+                && AddressBucket.Of(answered) == service.Submitter;
+
+            if (reached && result.Address is { } reachedAt)
             {
                 var previous = service.LastSuccess;
                 service.LastSuccess = now;
@@ -117,7 +128,7 @@ public sealed class AuthorityLedger
             {
                 service.Probes++;
 
-                if (result.Reached)
+                if (reached)
                     service.Successes++;
             }
         }
@@ -214,7 +225,10 @@ public sealed class AuthorityLedger
 
             // Rétabli, il repart de zéro : l'opérateur l'avait écarté pour une
             // raison, la probation doit se refaire sous ses yeux.
-            _services[key] = new Service { Address = key, Label = service.Label, FirstSeen = _clock.UtcNow };
+            _services[key] = new Service
+            {
+                Address = key, Label = service.Label, Submitter = service.Submitter, FirstSeen = _clock.UtcNow,
+            };
             SaveLocked();
             return true;
         }
@@ -288,6 +302,7 @@ public sealed class AuthorityLedger
             {
                 ["address"] = service.Address,
                 ["label"] = service.Label,
+                ["submitter"] = service.Submitter,
                 ["firstSeen"] = service.FirstSeen.ToUnixTimeSeconds(),
                 ["lastSuccess"] = Seconds(service.LastSuccess),
                 ["probationStart"] = Seconds(service.ProbationStart),
@@ -333,6 +348,7 @@ public sealed class AuthorityLedger
                 {
                     Address = Need(item, "address").GetValue<string>(),
                     Label = Need(item, "label").GetValue<string>(),
+                    Submitter = Need(item, "submitter").GetValue<string>(),
                     FirstSeen = DateTimeOffset.FromUnixTimeSeconds(Need(item, "firstSeen").GetValue<long>()),
                     LastSuccess = Time(item["lastSuccess"]),
                     ProbationStart = Time(item["probationStart"]),
@@ -361,6 +377,7 @@ public sealed class AuthorityLedger
     {
         public required string Address { get; init; }
         public required string Label { get; init; }
+        public required string Submitter { get; init; }
         public required DateTimeOffset FirstSeen { get; init; }
         public DateTimeOffset? LastSuccess { get; set; }
         public DateTimeOffset? ProbationStart { get; set; }

@@ -52,7 +52,8 @@ public sealed class ServerHarness : IAsyncDisposable
     }
 
     public static async Task<ServerHarness> StartAsync(
-        RendezvousLimits? limits = null, bool verbose = false, IConsensusSource? consensus = null)
+        RendezvousLimits? limits = null, bool verbose = false, IConsensusSource? consensus = null,
+        Action<DirectoryEntry, string>? candidacy = null)
     {
         var harness = new ServerHarness();
 
@@ -69,6 +70,7 @@ public sealed class ServerHarness : IAsyncDisposable
             Log = harness._log,
             Bans = harness.Bans,
             Consensus = consensus,
+            Candidacy = candidacy,
         };
 
         harness._running = harness.Server.RunAsync(harness._stopping.Token);

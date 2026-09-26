@@ -24,7 +24,7 @@ public sealed class AuthorityLedgerTests : IDisposable
         var ledger = AuthorityLedger.Load(StatePath, _clock);
 
         foreach (var address in addresses)
-            Assert.True(ledger.Track(new DirectoryEntry(address, "")));
+            Assert.True(ledger.Track(new DirectoryEntry(address, ""), AddressBucket.Of(Where(address))));
 
         return ledger;
     }
@@ -68,6 +68,20 @@ public sealed class AuthorityLedgerTests : IDisposable
 
         Run(ledger, Round, Up, "rdv.a.ch");
         Assert.Equal("rdv.a.ch:47900", Assert.Single(ledger.Listed()).Address);
+    }
+
+    [Fact]
+    public void Un_service_propose_par_un_tiers_n_entre_jamais()
+    {
+        // La candidature vient d'une autre adresse que celle où le service
+        // répond : quelqu'un inscrit le service d'un autre sans son accord.
+        var ledger = AuthorityLedger.Load(StatePath, _clock);
+        Assert.True(ledger.Track(new DirectoryEntry("rdv.a.ch", ""), "192.0.2.50"));
+
+        Run(ledger, TimeSpan.FromHours(80), Up, "rdv.a.ch");
+
+        Assert.Empty(ledger.Listed());
+        Assert.Equal(ServiceStanding.Candidate, StandingOf(ledger, "rdv.a.ch:47900"));
     }
 
     [Fact]
@@ -141,10 +155,10 @@ public sealed class AuthorityLedgerTests : IDisposable
     [Fact]
     public void Trois_services_du_meme_sous_reseau_n_en_listent_que_deux()
     {
-        var ledger = Ledger("rdv.a.ch", "rdv.b.ch", "rdv.c.ch");
         _where["rdv.a.ch"] = IPAddress.Parse("203.0.113.1");
         _where["rdv.b.ch"] = IPAddress.Parse("203.0.113.2");
         _where["rdv.c.ch"] = IPAddress.Parse("203.0.113.3");
+        var ledger = Ledger("rdv.a.ch", "rdv.b.ch", "rdv.c.ch");
 
         Run(ledger, TimeSpan.FromHours(73), Up, "rdv.a.ch", "rdv.b.ch", "rdv.c.ch");
 
@@ -172,7 +186,7 @@ public sealed class AuthorityLedgerTests : IDisposable
 
         Assert.True(ledger.Veto("rdv.a.ch"));
         Assert.Empty(ledger.Listed());
-        Assert.False(ledger.Track(new DirectoryEntry("rdv.a.ch", "")));
+        Assert.False(ledger.Track(new DirectoryEntry("rdv.a.ch", ""), AddressBucket.Of(Where("rdv.a.ch"))));
 
         Run(ledger, TimeSpan.FromHours(80), Up, "rdv.a.ch");
         Assert.Empty(ledger.Listed());
