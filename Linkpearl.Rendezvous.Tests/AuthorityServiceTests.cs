@@ -78,7 +78,7 @@ public sealed class AuthorityServiceTests : IDisposable
 
         _clock.Advance(TimeSpan.FromHours(1));
         _authority.IssueIfNeeded();
-        Assert.Equal(first + 1, _authority.Current!.Version);
+        Assert.True(_authority.Current!.Version > first);
     }
 
     [Fact]

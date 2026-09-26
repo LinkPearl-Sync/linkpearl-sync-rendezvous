@@ -245,7 +245,11 @@ public sealed class AuthorityLedger
     {
         lock (_gate)
         {
-            _version++;
+            // Jamais en dessous de l'heure : un registre retiré ou perdu ferait
+            // sinon repartir la version à 1, et chaque client refuserait les
+            // listes suivantes tant que la sienne vaut encore. Les secondes
+            // Unix tiennent dans un uint jusqu'en 2106.
+            _version = Math.Max(_version + 1, (uint)_clock.UtcNow.ToUnixTimeSeconds());
             SaveLocked();
             return _version;
         }

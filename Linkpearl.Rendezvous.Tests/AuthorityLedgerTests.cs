@@ -200,6 +200,18 @@ public sealed class AuthorityLedgerTests : IDisposable
     }
 
     [Fact]
+    public void Un_registre_remis_a_zero_ne_fait_pas_regresser_la_version()
+    {
+        var before = Ledger().NextVersion();
+
+        // L'opérateur retire le registre, comme le message d'erreur l'y invite.
+        File.Delete(StatePath);
+        _clock.Advance(TimeSpan.FromMinutes(1));
+
+        Assert.True(Ledger().NextVersion() > before);
+    }
+
+    [Fact]
     public void Un_registre_illisible_arrete_le_demarrage_sans_etre_ecrase()
     {
         File.WriteAllText(StatePath, "{ pas du json");
