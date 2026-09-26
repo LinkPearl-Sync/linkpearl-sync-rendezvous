@@ -46,7 +46,8 @@ if (args.Contains("--help"))
         --pending  fichier des candidatures reçues. Les relire, et recopier
                    dans --peers celles qu'on accepte.
 
-        --announce-to      annuaire auprès duquel se porter candidat. Répétable.
+        --announce-to      annuaire auprès duquel se porter candidat, au démarrage
+                           puis chaque jour. Répétable.
         --public-address   l'adresse sous laquelle les autres vous joignent, à
                            donner avec --announce-to.
         --label            le nom qui s'affichera dans les annuaires.
@@ -101,8 +102,8 @@ var directory = new PeerDirectory(ArgString("--peers", "peers.txt"), ArgString("
 using var stopping = new CancellationTokenSource();
 Console.CancelKeyPress += (_, e) => { e.Cancel = true; stopping.Cancel(); };
 
-// La candidature part une fois, au démarrage, et le service n'attend rien en
-// retour : c'est l'opérateur de l'annuaire qui décidera, ou pas.
+// La candidature part au démarrage puis chaque jour, et le service n'attend
+// rien en retour : c'est l'annuaire, ou son autorité, qui décidera.
 foreach (var target in ArgAll("--announce-to"))
 {
     if (RendezvousAddress.TryParse(target, out var to, out var why) is false)
@@ -111,10 +112,11 @@ foreach (var target in ArgAll("--announce-to"))
         continue;
     }
 
-    _ = Announcer.SubmitAsync(
+    _ = Announcer.SubmitEveryAsync(
         to,
         ArgString("--public-address", $"localhost:{port}"),
         ArgString("--label", ""),
+        Announcer.Interval,
         stopping.Token);
 }
 
