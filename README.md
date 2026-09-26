@@ -61,6 +61,20 @@ sauf `/var/lib/lprdv`, où vit tout l'état, et redémarre seul s'il tombe. Un s
 la main dans un terminal SSH s'arrête avec lui, et personne ne le voit : c'est ce qui est
 arrivé au premier déploiement public. `journalctl -u lprdv` donne le journal.
 
+### Mise à jour automatique
+
+Les serveurs installés par `install.sh` (site) se mettent à jour seuls : `lprdv-update.timer`
+lance `lprdv update` chaque heure. Une release n'est installée que si son manifeste
+`lprdv.release.json` porte une signature d'une clé de `ReleaseKeys.cs`, et seulement 24 heures
+après sa signature, sauf si le message du tag annoté contient `urgent`
+(`git tag -a v0.6.1 -m "v0.6.1 urgent"`). Une version qui ne répond pas sur `/healthz` est
+défaite et n'est plus retentée. Retirer une release pendant les 24 heures (la supprimer, ou la
+passer en pré-version) suffit à ce que personne ne l'installe. La production n'a pas de
+minuteur : `deploy.sh` la met à jour, et elle essuie chaque version la première.
+
+La clé privée vit dans le secret `LPRDV_RELEASE_KEY` de l'environnement GitHub `release`
+(tags `v*` seulement) et hors ligne chez le mainteneur. Elle est distincte de `directory.key`.
+
 ## Ce qui est sur le disque
 
 Rien de ce que le rendez-vous fait : les jetons, les attentes, les boîtes ouvertes et les

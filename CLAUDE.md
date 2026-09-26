@@ -70,6 +70,13 @@ LPRDV_HOST=debian@rdv.linkpearl.eorzea.events LPRDV_KEY=~/.ssh/linkpearl_rdv ./d
 - `directory.key` et `authority.json` y vivent aussi, pour le rôle d'autorité.
   `directory.key` se garde comme `bans.json` : sa clé publique est inscrite dans le plugin,
   la perdre oblige à publier une version du plugin. Ne jamais l'écraser ni la régénérer.
+- `~/.ssh/linkpearl_release.key` signe les releases pour la mise à jour automatique ; sa
+  partie publique est dans `ReleaseKeys.cs`, sa copie dans le secret `LPRDV_RELEASE_KEY` de
+  l'environnement GitHub `release`. Ne jamais l'écraser ni la régénérer : la perdre oblige
+  à publier une release signée par une autre clé déjà inscrite, sans quoi plus aucun
+  serveur ne se met à jour seul.
+- Publier une correction urgente : `git tag -a vX.Y.Z -m "vX.Y.Z urgent"`, qui lève le
+  délai de garde de 24 heures.
 - Vérifier de l'extérieur depuis le dépôt du plugin : lancer en parallèle
   `dotnet run --project Linkpearl.Harness -c Release -- rdv rdv.linkpearl.eorzea.events 47900 alice`
   et la même avec `bob`. Les deux doivent finir par « TOUT EST PASSÉ ».

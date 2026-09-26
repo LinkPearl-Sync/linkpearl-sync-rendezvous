@@ -21,6 +21,9 @@ on:
 jobs:
   release:
     runs-on: ubuntu-latest
+    # La clé de signature n'existe que dans cet environnement, que seuls les
+    # tags v* atteignent : ni une branche ni une pull request ne la lisent.
+    environment: release
 
     permissions:
       contents: write
@@ -73,10 +76,24 @@ jobs:
             -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true \
             "-p:Version=$VERSION" -o out --nologo
           ./out/lprdv --help | head -1
-          # L'unité part avec le binaire, sous la même somme : un script
+          # Les unités partent avec le binaire, sous la même somme : un script
           # d'installation n'a ainsi qu'une source à vérifier.
-          cp deploy/lprdv.service out/
-          cd out && sha256sum lprdv lprdv.service > lprdv.sha256 && cat lprdv.sha256
+          cp deploy/lprdv.service deploy/lprdv-update.service deploy/lprdv-update.timer out/
+          cd out && sha256sum lprdv lprdv.service lprdv-update.service lprdv-update.timer > lprdv.sha256 && cat lprdv.sha256
+
+      - name: Signer le manifeste
+        # Une pré-version n'est jamais installée automatiquement : pas de manifeste.
+        if: steps.tag.outputs.PRERELEASE == 'false'
+        env:
+          VERSION: ${{ steps.tag.outputs.VERSION }}
+          TAG: ${{ github.ref_name }}
+          LPRDV_RELEASE_KEY: ${{ secrets.LPRDV_RELEASE_KEY }}
+        # « urgent » dans le message du tag annoté lève le délai de garde. Le
+        # checkout ne rapporte pas l'objet du tag : on va le chercher.
+        run: |
+          git fetch --force origin "refs/tags/$TAG:refs/tags/$TAG"
+          if git tag -l --format='%(contents)' "$TAG" | grep -qiw urgent; then export LPRDV_URGENT=true; fi
+          ./out/lprdv release-sign "$VERSION" out
 
       - name: Publier la version
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2
@@ -87,5 +104,9 @@ jobs:
           files: |
             out/lprdv
             out/lprdv.service
+            out/lprdv-update.service
+            out/lprdv-update.timer
             out/lprdv.sha256
+            out/lprdv.release.json
+            out/lprdv.release.json.sig
           generate_release_notes: true

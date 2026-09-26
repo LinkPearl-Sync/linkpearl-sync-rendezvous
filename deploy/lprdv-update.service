@@ -1,0 +1,24 @@
+# Une ronde de mise à jour automatique de lprdv, déclenchée par
+# lprdv-update.timer. En root : elle remplace /opt/lprdv/lprdv et l'unité, et
+# redémarre le service. Elle ne touche ni /var/lib/lprdv, ni les compléments
+# de /etc/systemd/system/lprdv.service.d/.
+#
+# La couper : systemctl disable --now lprdv-update.timer
+
+[Unit]
+Description=Mise à jour automatique du service de rendez-vous Linkpearl
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/lprdv/lprdv update
+StateDirectory=lprdv-update
+# Durci autant que le travail le permet : il écrit dans /opt et /etc, et
+# parle à systemd, donc ni ProtectSystem=strict ni sandbox réseau.
+ProtectSystem=yes
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=yes

@@ -1,0 +1,13 @@
+# Chaque heure, décalé au hasard jusqu'à une heure : le réseau ne redémarre
+# pas à la même seconde quand une version sort de son délai de garde.
+
+[Unit]
+Description=Vérifie chaque heure s'il existe une nouvelle version de lprdv
+
+[Timer]
+OnBootSec=15min
+OnUnitActiveSec=1h
+RandomizedDelaySec=1h
+
+[Install]
+WantedBy=timers.target
