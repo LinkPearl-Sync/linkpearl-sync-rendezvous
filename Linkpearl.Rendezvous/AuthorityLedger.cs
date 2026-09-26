@@ -21,7 +21,8 @@ public enum ServiceStanding
 /// <summary>Un service suivi par l'autorité, tel que la console le montre.</summary>
 public sealed record TrackedService(
     string Address, string Label, ServiceStanding Standing, int Probes, int Successes,
-    DateTimeOffset FirstSeen, DateTimeOffset? LastSuccess, DateTimeOffset? ProbationStart, DateTimeOffset? ListedAt);
+    DateTimeOffset FirstSeen, DateTimeOffset? LastSuccess, DateTimeOffset? ProbationStart, DateTimeOffset? ListedAt,
+    DateTimeOffset? DelistedAt = null, double? Availability24h = null);
 
 /// <summary>
 /// Qui est candidat, qui est en probation, qui est listé.
@@ -49,6 +50,9 @@ public sealed class AuthorityLedger
     public const int MaxTracked = 1024;
 
     private static readonly TimeSpan Day = TimeSpan.FromDays(1);
+
+    /// <summary>Sondes gardées pour la disponibilité publiée : vingt-quatre heures à une toutes les dix minutes.</summary>
+    public const int HistorySize = 144;
 
     private readonly string _path;
     private readonly IClock _clock;
@@ -123,6 +127,13 @@ public sealed class AuthorityLedger
                 if (interrupted || fresh)
                     StartProbation(service, now);
             }
+
+            // Gardé pour tout service suivi, et pas seulement en probation : la
+            // page publique montre la disponibilité récente des services listés.
+            service.History.Add(reached);
+
+            if (service.History.Count > HistorySize)
+                service.History.RemoveAt(0);
 
             if (service.ProbationStart is not null)
             {
@@ -251,7 +262,9 @@ public sealed class AuthorityLedger
                 .OrderBy(service => service.Address, StringComparer.Ordinal)
                 .Select(service => new TrackedService(
                     service.Address, service.Label, StandingOf(service), service.Probes, service.Successes,
-                    service.FirstSeen, service.LastSuccess, service.ProbationStart, service.ListedAt))
+                    service.FirstSeen, service.LastSuccess, service.ProbationStart, service.ListedAt,
+                    service.DelistedAt,
+                    service.History.Count is 0 ? null : (double)service.History.Count(ok => ok) / service.History.Count))
                 .ToList();
     }
 
@@ -312,6 +325,7 @@ public sealed class AuthorityLedger
                 ["successes"] = service.Successes,
                 ["family"] = service.Family is null ? null : Convert.ToHexStringLower(service.Family),
                 ["vetoed"] = service.Vetoed,
+                ["history"] = string.Concat(service.History.Select(ok => ok ? '1' : '0')),
             });
 
         var admissions = new JsonArray();
@@ -360,6 +374,11 @@ public sealed class AuthorityLedger
                     Vetoed = Need(item, "vetoed").GetValue<bool>(),
                 };
 
+                // Absent d'un registre d'avant la page publique : l'historique
+                // repart alors de zéro, sans que rien d'autre ne change.
+                if (item["history"] is { } history)
+                    service.History.AddRange(history.GetValue<string>().TakeLast(HistorySize).Select(bit => bit == '1'));
+
                 _services[service.Address] = service;
             }
         }
@@ -387,5 +406,6 @@ public sealed class AuthorityLedger
         public int Successes { get; set; }
         public byte[]? Family { get; set; }
         public bool Vetoed { get; set; }
+        public List<bool> History { get; } = [];
     }
 }

@@ -60,6 +60,12 @@ public static class RendezvousKind
 
     /// <summary>Une page : son numéro, le nombre de pages, puis une tranche du document signé.</summary>
     public const byte ConsensusPage = 0x18;
+
+    /// <summary>Demande une page de l'état public du réseau, que seule une autorité tient.</summary>
+    public const byte NetworkStatusQuery = 0x19;
+
+    /// <summary>Une page : son numéro, le nombre de pages, puis une tranche du JSON d'état.</summary>
+    public const byte NetworkStatusPage = 0x1A;
 }
 
 /// <summary>Ce qu'un client annonce au rendez-vous.</summary>
@@ -548,26 +554,57 @@ public static class RendezvousWire
     /// <summary>Plafond de pages, donc du document : 512 Kio.</summary>
     public const int MaxConsensusPages = 16;
 
-    public static byte[] ConsensusQuery(int page)
+    public static byte[] ConsensusQuery(int page) => PageQuery(RendezvousKind.ConsensusQuery, page);
+
+    public static bool TryReadConsensusQuery(ReadOnlySpan<byte> frame, out int page)
+        => TryReadPageQuery(RendezvousKind.ConsensusQuery, frame, out page);
+
+    public static byte[] ConsensusPage(int page, int pages, ReadOnlySpan<byte> chunk)
+        => ChunkPage(RendezvousKind.ConsensusPage, page, pages, chunk);
+
+    public static bool TryReadConsensusPage(
+        ReadOnlySpan<byte> frame, out int page, out int pages, out byte[] chunk, out string? rejection)
+        => TryReadChunkPage(RendezvousKind.ConsensusPage, "page de liste signée malformée", frame, out page, out pages, out chunk, out rejection);
+
+    /// <summary>
+    /// Une page de l'état public du réseau, découpé comme la liste signée.
+    /// </summary>
+    /// <remarks>
+    /// Mêmes tranches et même plafond : ce n'est qu'un autre document servi par
+    /// l'autorité, lu par le site du projet pour sa page publique.
+    /// </remarks>
+    public static byte[] NetworkStatusQuery(int page) => PageQuery(RendezvousKind.NetworkStatusQuery, page);
+
+    public static bool TryReadNetworkStatusQuery(ReadOnlySpan<byte> frame, out int page)
+        => TryReadPageQuery(RendezvousKind.NetworkStatusQuery, frame, out page);
+
+    public static byte[] NetworkStatusPage(int page, int pages, ReadOnlySpan<byte> chunk)
+        => ChunkPage(RendezvousKind.NetworkStatusPage, page, pages, chunk);
+
+    public static bool TryReadNetworkStatusPage(
+        ReadOnlySpan<byte> frame, out int page, out int pages, out byte[] chunk, out string? rejection)
+        => TryReadChunkPage(RendezvousKind.NetworkStatusPage, "page d'état du réseau malformée", frame, out page, out pages, out chunk, out rejection);
+
+    private static byte[] PageQuery(byte kind, int page)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(page);
         ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual(page, MaxConsensusPages);
 
-        return [RendezvousKind.ConsensusQuery, (byte)(page >> 8), (byte)page];
+        return [kind, (byte)(page >> 8), (byte)page];
     }
 
-    public static bool TryReadConsensusQuery(ReadOnlySpan<byte> frame, out int page)
+    private static bool TryReadPageQuery(byte kind, ReadOnlySpan<byte> frame, out int page)
     {
         page = 0;
 
-        if (frame.Length != 3 || frame[0] != RendezvousKind.ConsensusQuery)
+        if (frame.Length != 3 || frame[0] != kind)
             return false;
 
         page = (frame[1] << 8) | frame[2];
         return page < MaxConsensusPages;
     }
 
-    public static byte[] ConsensusPage(int page, int pages, ReadOnlySpan<byte> chunk)
+    private static byte[] ChunkPage(byte kind, int page, int pages, ReadOnlySpan<byte> chunk)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(pages, 1);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(pages, MaxConsensusPages);
@@ -578,23 +615,24 @@ public static class RendezvousWire
             throw new ArgumentException($"tranche de {chunk.Length} octets, hors de 1 à {ConsensusPageBytes}", nameof(chunk));
 
         var frame = new byte[5 + chunk.Length];
-        frame[0] = RendezvousKind.ConsensusPage;
+        frame[0] = kind;
         BinaryPrimitives.WriteUInt16BigEndian(frame.AsSpan(1), (ushort)page);
         BinaryPrimitives.WriteUInt16BigEndian(frame.AsSpan(3), (ushort)pages);
         chunk.CopyTo(frame.AsSpan(5));
         return frame;
     }
 
-    public static bool TryReadConsensusPage(
-        ReadOnlySpan<byte> frame, out int page, out int pages, out byte[] chunk, out string? rejection)
+    private static bool TryReadChunkPage(
+        byte kind, string malformed, ReadOnlySpan<byte> frame,
+        out int page, out int pages, out byte[] chunk, out string? rejection)
     {
         page = 0;
         pages = 0;
         chunk = [];
 
-        if (frame.Length < 6 || frame.Length > 5 + ConsensusPageBytes || frame[0] != RendezvousKind.ConsensusPage)
+        if (frame.Length < 6 || frame.Length > 5 + ConsensusPageBytes || frame[0] != kind)
         {
-            rejection = "page de liste signée malformée";
+            rejection = malformed;
             return false;
         }
 

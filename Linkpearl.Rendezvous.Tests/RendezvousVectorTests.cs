@@ -68,6 +68,8 @@ public class RendezvousVectorTests
             new ServiceConsensus(7, 1_790_000_000, 1_790_604_800,
                 [new ConsensusEntry("rdv.ami.ch:47900", "Ami", Repeat(0x0F, 8))]),
             [new ConsensusSignature(Repeat(0x5A, 8), Repeat(0x5B, 64))])),
+        ("etat-reseau-demande", () => RendezvousWire.NetworkStatusQuery(1)),
+        ("etat-reseau-page", () => RendezvousWire.NetworkStatusPage(0, 2, new byte[] { 0xAB, 0xCD })),
     ];
 
     /// <summary>Les vecteurs, retrouvés dans les sources du dépôt.</summary>

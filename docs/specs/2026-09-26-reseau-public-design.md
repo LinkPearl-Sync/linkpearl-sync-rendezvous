@@ -94,8 +94,8 @@ gravité pour une probation de soixante-douze heures.
 
 Le registre garde, pour chaque service suivi, le résultat de ses 144 dernières
 sondes, qu'il soit candidat, en probation, listé ou sorti. Il est persisté dans
-`authority.json` sous forme d'une chaîne hexadécimale de bits (le plus ancien en
-tête) et d'un compte de sondes valides, pour qu'un redémarrage ne l'efface pas.
+`authority.json` sous forme d'une chaîne de « 0 » et de « 1 » (le plus ancien en
+tête), lisible à l'œil, pour qu'un redémarrage ne l'efface pas.
 Un service écarté n'accumule plus rien.
 
 ### Deux trames

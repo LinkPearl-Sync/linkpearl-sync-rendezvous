@@ -8,6 +8,9 @@ namespace Linkpearl.Rendezvous;
 public interface IConsensusSource
 {
     byte[]? Document { get; }
+
+    /// <summary>L'état public du réseau, en JSON, pour la page du site.</summary>
+    byte[]? Status => null;
 }
 
 /// <summary>
@@ -32,6 +35,7 @@ public sealed class AuthorityService(
     private readonly Lock _gate = new();
     private ServiceConsensus? _current;
     private byte[]? _document;
+    private byte[]? _status;
 
     public TextWriter Log { get; init; } = Console.Out;
 
@@ -48,6 +52,16 @@ public sealed class AuthorityService(
         }
     }
 
+    /// <summary>L'état public du réseau, recalculé à chaque ronde et non à chaque demande.</summary>
+    public byte[]? Status
+    {
+        get
+        {
+            lock (_gate)
+                return _status;
+        }
+    }
+
     public ServiceConsensus? Current
     {
         get
@@ -60,6 +74,7 @@ public sealed class AuthorityService(
     public async Task RunAsync(CancellationToken ct)
     {
         IssueIfNeeded();
+        RefreshStatus();
 
         while (ct.IsCancellationRequested is false)
         {
@@ -103,6 +118,15 @@ public sealed class AuthorityService(
 
         ledger.Settle();
         IssueIfNeeded();
+        RefreshStatus();
+    }
+
+    public void RefreshStatus()
+    {
+        var status = NetworkStatus.Build(ledger.Snapshot(), Current, PublicPoint, clock.UtcNow);
+
+        lock (_gate)
+            _status = status;
     }
 
     public void IssueIfNeeded()

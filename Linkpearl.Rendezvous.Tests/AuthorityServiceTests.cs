@@ -17,9 +17,11 @@ internal sealed class ScriptedProbe : IServiceProbe
 }
 
 /// <summary>Une source de liste fixe, pour tester le service de pages.</summary>
-internal sealed class FixedConsensus(byte[]? document) : IConsensusSource
+internal sealed class FixedConsensus(byte[]? document, byte[]? status = null) : IConsensusSource
 {
     public byte[]? Document => document;
+
+    public byte[]? Status => status;
 }
 
 public sealed class AuthorityServiceTests : IDisposable
@@ -93,6 +95,51 @@ public sealed class AuthorityServiceTests : IDisposable
 
         Assert.Equal("rdv.candidat.ch", entry.Address);
         Assert.Equal("127.0.0.1", submitter);
+    }
+
+    [Fact]
+    public async Task L_etat_public_suit_les_rondes()
+    {
+        _authority.Ledger.Track(new DirectoryEntry("rdv.candidat.ch", "Candidat"), "203.0.113.7");
+        _probe.Up["rdv.candidat.ch:47900"] = IPAddress.Parse("203.0.113.7");
+
+        await _authority.RoundAsync(CancellationToken.None);
+
+        var status = System.Text.Json.Nodes.JsonNode.Parse(_authority.Status!)!;
+        Assert.Equal("probation", status["services"]![0]!["standing"]!.GetValue<string>());
+        Assert.NotNull(status["authority"]);
+    }
+
+    [Fact]
+    public async Task Le_service_sert_l_etat_du_reseau_par_pages()
+    {
+        var status = RandomNumberGenerator.GetBytes(40_000);
+        await using var harness = await ServerHarness.StartAsync(consensus: new FixedConsensus(null, status));
+        using var client = await harness.ConnectAsync();
+        var received = new List<byte>();
+
+        for (var page = 0; page < 2; page++)
+        {
+            await client.SendAsync(RendezvousWire.NetworkStatusQuery(page));
+            var frame = await client.ReadFrameAsync();
+
+            Assert.True(RendezvousWire.TryReadNetworkStatusPage(frame!, out var index, out var pages, out var chunk, out var why), why);
+            Assert.Equal(2, pages);
+            received.AddRange(chunk);
+        }
+
+        Assert.Equal(status, received.ToArray());
+    }
+
+    [Fact]
+    public async Task Sans_autorite_l_etat_du_reseau_est_refuse_poliment()
+    {
+        await using var harness = await ServerHarness.StartAsync();
+        using var client = await harness.ConnectAsync();
+
+        await client.SendAsync(RendezvousWire.NetworkStatusQuery(0));
+
+        Assert.Equal(RendezvousKind.Error, (await client.ReadFrameAsync())![0]);
     }
 
     [Fact]

@@ -70,6 +70,35 @@ public sealed class AuthorityLedgerTests : IDisposable
         Assert.Equal("rdv.a.ch:47900", Assert.Single(ledger.Listed()).Address);
     }
 
+    private static double? AvailabilityOf(AuthorityLedger ledger, string address)
+        => ledger.Snapshot().Single(service => service.Address == address).Availability24h;
+
+    [Fact]
+    public void La_disponibilite_glisse_sur_les_144_dernieres_sondes()
+    {
+        var ledger = Ledger("rdv.a.ch");
+        Assert.Null(AvailabilityOf(ledger, "rdv.a.ch:47900"));
+
+        Run(ledger, TimeSpan.FromHours(24), Up, "rdv.a.ch");
+        Assert.Equal(1.0, AvailabilityOf(ledger, "rdv.a.ch:47900"));
+
+        // Douze heures de silence : la moitié de la fenêtre.
+        Run(ledger, TimeSpan.FromHours(12), Down, "rdv.a.ch");
+        Assert.Equal(0.5, AvailabilityOf(ledger, "rdv.a.ch:47900"));
+    }
+
+    [Fact]
+    public void La_disponibilite_survit_a_un_redemarrage()
+    {
+        var ledger = Ledger("rdv.a.ch");
+        Run(ledger, TimeSpan.FromHours(2), Up, "rdv.a.ch");
+        Run(ledger, TimeSpan.FromHours(2), Down, "rdv.a.ch");
+
+        var reloaded = AuthorityLedger.Load(StatePath, _clock);
+
+        Assert.Equal(0.5, AvailabilityOf(reloaded, "rdv.a.ch:47900"));
+    }
+
     [Fact]
     public void Un_service_propose_par_un_tiers_n_entre_jamais()
     {

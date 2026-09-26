@@ -478,6 +478,7 @@ public sealed class RendezvousServer(
                     RendezvousKind.DirectorySubmit => HandleDirectorySubmit(session, frame),
                     RendezvousKind.BanListQuery => await HandleBanListQueryAsync(session, frame, ct).ConfigureAwait(false),
                     RendezvousKind.ConsensusQuery => await HandleConsensusQueryAsync(session, frame, ct).ConfigureAwait(false),
+            RendezvousKind.NetworkStatusQuery => await HandleNetworkStatusQueryAsync(session, frame, ct).ConfigureAwait(false),
                     _ => false,
                 };
 
@@ -581,26 +582,42 @@ public sealed class RendezvousServer(
         return true;
     }
 
-    private async Task<bool> HandleConsensusQueryAsync(PeerSession session, byte[] frame, CancellationToken ct)
+    private Task<bool> HandleConsensusQueryAsync(PeerSession session, byte[] frame, CancellationToken ct)
+        => RendezvousWire.TryReadConsensusQuery(frame, out var page)
+            ? ServeChunksAsync(session, page, Consensus?.Document, "ce service ne publie pas de liste signée", RendezvousWire.ConsensusPage, ct)
+            : RefuseAsync(session, "demande de liste signée malformée", ct);
+
+    private Task<bool> HandleNetworkStatusQueryAsync(PeerSession session, byte[] frame, CancellationToken ct)
+        => RendezvousWire.TryReadNetworkStatusQuery(frame, out var page)
+            ? ServeChunksAsync(session, page, Consensus?.Status, "ce service ne publie pas l'état du réseau", RendezvousWire.NetworkStatusPage, ct)
+            : RefuseAsync(session, "demande d'état du réseau malformée", ct);
+
+    private static async Task<bool> RefuseAsync(PeerSession session, string why, CancellationToken ct)
     {
-        if (RendezvousWire.TryReadConsensusQuery(frame, out var page) is false)
-        {
-            await session.SendAsync(RendezvousWire.Error("demande de liste signée malformée"), ct).ConfigureAwait(false);
-            return false;
-        }
+        await session.SendAsync(RendezvousWire.Error(why), ct).ConfigureAwait(false);
+        return false;
+    }
 
+    /// <summary>Sert une page d'un document découpé en tranches : liste signée ou état du réseau.</summary>
+    /// <remarks>
+    /// Les deux documents partagent un même plafond de pages par connexion :
+    /// trois octets de demande pour 32 Kio de réponse feraient sinon du
+    /// service un amplificateur.
+    ///
+    /// Le document est lu une fois par page : si l'autorité le réémet entre
+    /// deux pages, le client recolle deux versions, et la signature ou la
+    /// lecture échoue ; il garde alors ce qu'il avait. Rien à verrouiller ici.
+    /// </remarks>
+    private static async Task<bool> ServeChunksAsync(
+        PeerSession session, int page, byte[]? document, string unavailable,
+        Func<int, int, ReadOnlySpan<byte>, byte[]> makePage, CancellationToken ct)
+    {
         if (++session.ConsensusPagesServed > RendezvousWire.MaxConsensusPages)
-        {
-            await session.SendAsync(RendezvousWire.Error("trop de pages demandées"), ct).ConfigureAwait(false);
-            return false;
-        }
+            return await RefuseAsync(session, "trop de pages demandées", ct).ConfigureAwait(false);
 
-        // Lu une fois par page : si l'autorité réémet entre deux pages, le
-        // client recolle deux versions, la signature échoue, et il garde sa
-        // liste jusqu'à la récupération suivante. Rien à verrouiller ici.
-        if (Consensus?.Document is not { } document)
+        if (document is null)
         {
-            await session.SendAsync(RendezvousWire.Error("ce service ne publie pas de liste signée"), ct).ConfigureAwait(false);
+            await session.SendAsync(RendezvousWire.Error(unavailable), ct).ConfigureAwait(false);
             return true;
         }
 
@@ -609,12 +626,12 @@ public sealed class RendezvousServer(
 
         if (page >= pages)
         {
-            await session.SendAsync(RendezvousWire.Error("page hors de la liste"), ct).ConfigureAwait(false);
+            await session.SendAsync(RendezvousWire.Error("page hors du document"), ct).ConfigureAwait(false);
             return true;
         }
 
-        var chunk = document.AsSpan(page * size, Math.Min(size, document.Length - page * size)).ToArray();
-        await session.SendAsync(RendezvousWire.ConsensusPage(page, pages, chunk), ct).ConfigureAwait(false);
+        var frame = makePage(page, pages, document.AsSpan(page * size, Math.Min(size, document.Length - page * size)));
+        await session.SendAsync(frame, ct).ConfigureAwait(false);
         return true;
     }
 
