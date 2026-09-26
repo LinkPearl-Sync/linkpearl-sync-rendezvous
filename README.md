@@ -65,7 +65,9 @@ invitations déposées vivent en mémoire et disparaissent avec le processus. Re
 n'efface donc aucune trace d'usage, puisqu'il n'y en a pas.
 
 Ce que l'opérateur configure, en revanche, est sur le disque : `peers.txt` et `pending.txt`
-pour l'annuaire, `bans.json` pour la liste de bannissement, `admin.token` pour la console.
+pour l'annuaire, `bans.json` pour la liste de bannissement, `admin.token` pour la console,
+et, pour une autorité, `directory.key` (sa clé de signature) et `authority.json` (les
+probations en cours).
 Ces fichiers se réécrivent d'un bloc, à côté puis renommés, pour qu'une coupure laisse
 l'ancien contenu plutôt qu'un fichier tronqué. Le jeton est créé lisible par son seul
 propriétaire.
@@ -193,6 +195,30 @@ de commande ou en authentification basique pour le navigateur.
 | `GET /api/worlds` | La table des mondes, id, nom, centre de données, région |
 | `GET /api/settings` | Les réglages en vigueur et leurs bornes |
 | `PUT /api/settings` | Change des réglages, à chaud et dans `settings.json` ; 400 hors bornes |
+| `POST /api/authority/veto` | Écarte un service du cercle ouvert ; 404 s'il n'est pas suivi |
+| `DELETE /api/authority/veto` | Rétablit un service écarté, qui repart en candidat |
+
+## Le cercle ouvert
+
+Avec `--directory-authority`, le service tient en plus le rôle d'autorité du cercle ouvert.
+Il est désactivé par défaut : un service autohébergé n'en a pas l'usage, et le plugin
+n'accepterait de toute façon que la liste signée par une clé qu'il connaît.
+
+L'autorité sonde toutes les dix minutes les candidats reçus par `--announce-to` et les
+services de `peers.txt`, jamais une adresse non publique. Un candidat entre dans la liste
+après 72 heures à au moins 95 % de sondes réussies, en sort après 24 heures de silence,
+reprend sa place s'il revient dans les 72 heures, et est oublié après 7 jours sans
+réponse. Au plus deux services par /24 ou /48, et cinq admissions par jour. La liste est
+signée par `directory.key` (`--directory-key`), valable sept jours, et resignée chaque
+jour même inchangée ; les probations vivent dans `authority.json` (`--authority-state`).
+
+La console montre la clé publique, la version émise, et chaque service suivi avec son
+état et son taux de réussite. « Écarter » retire un service tout de suite ; l'admission se
+passe de geste humain, le retrait non.
+
+Pour contribuer au cercle ouvert d'un autre, il suffit de lancer son service avec
+`--announce-to <autorité> --public-address <son adresse>` : la candidature part au
+démarrage puis chaque jour.
 
 ## Le format de fil est une copie
 

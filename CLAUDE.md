@@ -12,7 +12,10 @@ et son `docs/reprise.md` avant toute décision qui touche au protocole.
 2. **Le rendez-vous n'est pas une autorité.** Il ne voit ni clé publique, ni nom de
    personnage, ni manifeste, ni fichier. Ne jamais introduire de chemin de code où le
    serveur fournit une clé, apprend une identité stable, ou conserve autre chose qu'un jeton
-   opaque de dix minutes.
+   opaque de dix minutes. Seule exception, le rôle d'autorité (`--directory-authority`) :
+   il fait foi sur le cercle ouvert et sur lui seul, en signant la liste des services
+   admis. Il ne voit toujours ni clé, ni nom, ni manifeste, et le cercle d'ancrage, où
+   passent les pairages, reste composé à la main.
 
 ## Style
 
@@ -59,6 +62,9 @@ LPRDV_HOST=debian@rdv.linkpearl.eorzea.events LPRDV_KEY=~/.ssh/linkpearl_rdv ./d
 - Tout l'état vit dans `/var/lib/lprdv`. `bans.json` y porte le sel des empreintes :
   le perdre rend notre liste incomparable à celle des autres services. Ne jamais
   l'écraser ni le régénérer.
+- `directory.key` et `authority.json` y vivent aussi, pour le rôle d'autorité.
+  `directory.key` se garde comme `bans.json` : sa clé publique est inscrite dans le plugin,
+  la perdre oblige à publier une version du plugin. Ne jamais l'écraser ni la régénérer.
 - Vérifier de l'extérieur depuis le dépôt du plugin : lancer en parallèle
   `dotnet run --project Linkpearl.Harness -c Release -- rdv rdv.linkpearl.eorzea.events 47900 alice`
   et la même avec `bob`. Les deux doivent finir par « TOUT EST PASSÉ ».
