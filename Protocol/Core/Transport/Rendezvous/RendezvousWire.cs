@@ -54,6 +54,12 @@ public static class RendezvousKind
 
     /// <summary>Une page : son numéro, le nombre de pages, puis le JSON d'une <c>BanList</c>.</summary>
     public const byte BanListData = 0x16;
+
+    /// <summary>Demande une page de la liste signée du cercle ouvert.</summary>
+    public const byte ConsensusQuery = 0x17;
+
+    /// <summary>Une page : son numéro, le nombre de pages, puis une tranche du document signé.</summary>
+    public const byte ConsensusPage = 0x18;
 }
 
 /// <summary>Ce qu'un client annonce au rendez-vous.</summary>
@@ -528,6 +534,80 @@ public static class RendezvousWire
         }
 
         json = System.Text.Encoding.UTF8.GetString(frame[5..]);
+        rejection = null;
+        return true;
+    }
+
+    /// <summary>Octets du document signé portés par une page.</summary>
+    /// <remarks>
+    /// Une tranche brute et non des entrées : le document ne se vérifie
+    /// qu'entier, donc le découper selon son contenu n'apporterait rien.
+    /// </remarks>
+    public const int ConsensusPageBytes = 32 * 1024;
+
+    /// <summary>Plafond de pages, donc du document : 512 Kio.</summary>
+    public const int MaxConsensusPages = 16;
+
+    public static byte[] ConsensusQuery(int page)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(page);
+        ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual(page, MaxConsensusPages);
+
+        return [RendezvousKind.ConsensusQuery, (byte)(page >> 8), (byte)page];
+    }
+
+    public static bool TryReadConsensusQuery(ReadOnlySpan<byte> frame, out int page)
+    {
+        page = 0;
+
+        if (frame.Length != 3 || frame[0] != RendezvousKind.ConsensusQuery)
+            return false;
+
+        page = (frame[1] << 8) | frame[2];
+        return page < MaxConsensusPages;
+    }
+
+    public static byte[] ConsensusPage(int page, int pages, ReadOnlySpan<byte> chunk)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(pages, 1);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(pages, MaxConsensusPages);
+        ArgumentOutOfRangeException.ThrowIfNegative(page);
+        ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual(page, pages);
+
+        if (chunk.Length is 0 || chunk.Length > ConsensusPageBytes)
+            throw new ArgumentException($"tranche de {chunk.Length} octets, hors de 1 à {ConsensusPageBytes}", nameof(chunk));
+
+        var frame = new byte[5 + chunk.Length];
+        frame[0] = RendezvousKind.ConsensusPage;
+        BinaryPrimitives.WriteUInt16BigEndian(frame.AsSpan(1), (ushort)page);
+        BinaryPrimitives.WriteUInt16BigEndian(frame.AsSpan(3), (ushort)pages);
+        chunk.CopyTo(frame.AsSpan(5));
+        return frame;
+    }
+
+    public static bool TryReadConsensusPage(
+        ReadOnlySpan<byte> frame, out int page, out int pages, out byte[] chunk, out string? rejection)
+    {
+        page = 0;
+        pages = 0;
+        chunk = [];
+
+        if (frame.Length < 6 || frame.Length > 5 + ConsensusPageBytes || frame[0] != RendezvousKind.ConsensusPage)
+        {
+            rejection = "page de liste signée malformée";
+            return false;
+        }
+
+        page = BinaryPrimitives.ReadUInt16BigEndian(frame[1..]);
+        pages = BinaryPrimitives.ReadUInt16BigEndian(frame[3..]);
+
+        if (pages is < 1 or > MaxConsensusPages || page >= pages)
+        {
+            rejection = $"page {page} sur {pages}, hors bornes (plafond {MaxConsensusPages})";
+            return false;
+        }
+
+        chunk = frame[5..].ToArray();
         rejection = null;
         return true;
     }

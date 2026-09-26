@@ -15,7 +15,10 @@
     "libelleAnnuaireMax": 64,
     "adresseAnnuaireMax": 255,
     "entreesParPageBannissement": 64,
-    "pagesBannissementMax": 64
+    "pagesBannissementMax": 64,
+    "octetsParPageConsensus": 32768,
+    "pagesConsensusMax": 16,
+    "entreesConsensusMax": 1024
   },
   "trames": [
     {
@@ -93,6 +96,18 @@
     {
       "nom": "bannissement-page",
       "hex": "16000000027b2276657273696f6e223a317d"
+    },
+    {
+      "nom": "consensus-demande",
+      "hex": "170001"
+    },
+    {
+      "nom": "consensus-page",
+      "hex": "1800000002abcd"
+    },
+    {
+      "nom": "consensus-document",
+      "hex": "00000007000000006ab13b80000000006aba76000001107264762e616d692e63683a343739303003416d690f0f0f0f0f0f0f0f015a5a5a5a5a5a5a5a5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b"
     }
   ]
 }

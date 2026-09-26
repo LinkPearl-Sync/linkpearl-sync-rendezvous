@@ -196,11 +196,12 @@ de commande ou en authentification basique pour le navigateur.
 
 ## Le format de fil est une copie
 
-`Protocol/` contient cinq fichiers copiés **littéralement** depuis le dépôt du plugin :
+`Protocol/` contient six fichiers copiés **littéralement** depuis le dépôt du plugin :
 
 | Ici | Là-bas |
 |---|---|
 | `Protocol/Core/Transport/Rendezvous/RendezvousWire.cs` | `Linkpearl/Core/Transport/Rendezvous/RendezvousWire.cs` |
+| `Protocol/Core/Transport/Rendezvous/ServiceConsensus.cs` | `Linkpearl/Core/Transport/Rendezvous/ServiceConsensus.cs` |
 | `Protocol/Core/Transport/Rendezvous/RendezvousTicket.cs` | `Linkpearl/Core/Transport/Rendezvous/RendezvousTicket.cs` |
 | `Protocol/Core/Transport/Rendezvous/RendezvousAddress.cs` | `Linkpearl/Core/Transport/Rendezvous/RendezvousAddress.cs` |
 | `Protocol/Core/Abstractions/IClock.cs` | `Linkpearl/Core/Abstractions/IClock.cs` |
