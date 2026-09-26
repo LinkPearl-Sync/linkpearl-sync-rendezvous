@@ -49,7 +49,10 @@ LPRDV_HOST=debian@203.0.113.7 LPRDV_KEY=~/.ssh/ma_cle ./deploy/deploy.sh
 ```
 
 Le script compile un binaire autonome, le pose dans `/opt/lprdv/`, installe l'unité
-`deploy/lprdv.service` et redémarre le service, puis attend que `/healthz` réponde. Il lui
+`deploy/lprdv.service` et son complément `deploy/production.conf` (les options de
+`rdv.linkpearl.eorzea.events`), redémarre le service, puis attend que `/healthz` réponde.
+L'unité reste générique, car c'est elle que publie chaque version et que chacun installe :
+les options propres à un serveur vont toujours dans un complément. Il lui
 faut un compte distant avec sudo, et il est rejouable : le premier passage crée le compte
 système `lprdv`, les suivants ne remplacent que le binaire.
 

@@ -25,7 +25,7 @@ dotnet publish Linkpearl.Rendezvous -c Release -r linux-x64 --self-contained \
   -p:Version="${version#v}" -o "$out" --nologo -v quiet
 
 echo "==> Envoi vers $LPRDV_HOST"
-scp "${ssh_opts[@]}" -q "$out/lprdv" deploy/lprdv.service "$LPRDV_HOST:/tmp/"
+scp "${ssh_opts[@]}" -q "$out/lprdv" deploy/lprdv.service deploy/production.conf "$LPRDV_HOST:/tmp/"
 
 echo "==> Installation et redémarrage"
 ssh "${ssh_opts[@]}" "$LPRDV_HOST" sudo bash -s <<'EOF'
@@ -36,7 +36,9 @@ install -d -m 0755 /opt/lprdv
 install -m 0755 /tmp/lprdv /opt/lprdv/lprdv.new
 mv -f /opt/lprdv/lprdv.new /opt/lprdv/lprdv
 install -m 0644 /tmp/lprdv.service /etc/systemd/system/lprdv.service
-rm -f /tmp/lprdv /tmp/lprdv.service
+install -d -m 0755 /etc/systemd/system/lprdv.service.d
+install -m 0644 /tmp/production.conf /etc/systemd/system/lprdv.service.d/production.conf
+rm -f /tmp/lprdv /tmp/lprdv.service /tmp/production.conf
 systemctl daemon-reload
 systemctl enable --quiet lprdv
 systemctl restart lprdv

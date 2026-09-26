@@ -7,6 +7,11 @@
 #
 # Le premier déploiement public tournait dans un terminal SSH, et s'est arrêté
 # avec lui sans que personne le voie : d'où Restart=always.
+#
+# Générique : c'est celle que chacun installe, publiée avec chaque version.
+# Les options d'un serveur donné vont dans un complément,
+# /etc/systemd/system/lprdv.service.d/*.conf, jamais ici : la production y
+# ajoutait son rôle d'autorité et son nom, que tout auto-hébergeur aurait repris.
 
 [Unit]
 Description=Service de rendez-vous Linkpearl
@@ -18,7 +23,7 @@ Type=simple
 User=lprdv
 Group=lprdv
 WorkingDirectory=/var/lib/lprdv
-ExecStart=/opt/lprdv/lprdv --port 47900 --directory-authority --public-address rdv.linkpearl.eorzea.events --label Linkpearl
+ExecStart=/opt/lprdv/lprdv --port 47900
 Restart=always
 RestartSec=5
 # Sans plafond, un tas .NET mal borné prendrait la mémoire du VPS entier.

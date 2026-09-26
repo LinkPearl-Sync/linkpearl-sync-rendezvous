@@ -58,8 +58,12 @@ LPRDV_HOST=debian@rdv.linkpearl.eorzea.events LPRDV_KEY=~/.ssh/linkpearl_rdv ./d
   et la réflexion renverrait l'adresse de Cloudflare. Compte `debian`,
   sudo sans mot de passe, clé `~/.ssh/linkpearl_rdv` réservée à ce déploiement.
 - `deploy.sh` compile, pose `/opt/lprdv/lprdv` par renommage, installe
-  `deploy/lprdv.service`, redémarre et attend `/healthz`. Il est rejouable : le premier
-  passage crée le compte système `lprdv`.
+  `deploy/lprdv.service` et le complément `deploy/production.conf`, redémarre et attend
+  `/healthz`. Il est rejouable : le premier passage crée le compte système `lprdv`.
+- **`deploy/lprdv.service` reste générique** : chaque release la publie, et le script
+  d'installation du site la pose chez tout auto-hébergeur. Les options de la production
+  (`--directory-authority`, son nom, son libellé) vivent dans `production.conf`, jamais
+  dans l'unité.
 - Tout l'état vit dans `/var/lib/lprdv`. `bans.json` y porte le sel des empreintes :
   le perdre rend notre liste incomparable à celle des autres services. Ne jamais
   l'écraser ni le régénérer.

@@ -73,7 +73,10 @@ jobs:
             -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true \
             "-p:Version=$VERSION" -o out --nologo
           ./out/lprdv --help | head -1
-          cd out && sha256sum lprdv > lprdv.sha256 && cat lprdv.sha256
+          # L'unité part avec le binaire, sous la même somme : un script
+          # d'installation n'a ainsi qu'une source à vérifier.
+          cp deploy/lprdv.service out/
+          cd out && sha256sum lprdv lprdv.service > lprdv.sha256 && cat lprdv.sha256
 
       - name: Publier la version
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2
@@ -83,5 +86,6 @@ jobs:
           prerelease: ${{ steps.tag.outputs.PRERELEASE == 'true' }}
           files: |
             out/lprdv
+            out/lprdv.service
             out/lprdv.sha256
           generate_release_notes: true
