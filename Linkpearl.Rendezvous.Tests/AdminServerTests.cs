@@ -103,6 +103,18 @@ public sealed class AdminServerTests : IAsyncLifetime
     }
 
     [Fact]
+    public void La_page_ne_charge_rien_d_un_tiers()
+    {
+        // Une feuille de style tierce lit le DOM par ses sélecteurs et peut en
+        // exfiltrer les attributs : la console authentifiée n'en charge aucune.
+        var external = AdminPage.Html.Split(["href=\"", "src=\""], StringSplitOptions.None)
+            .Skip(1)
+            .Where(target => target.StartsWith("http", StringComparison.Ordinal) || target.StartsWith("//", StringComparison.Ordinal));
+
+        Assert.Empty(external);
+    }
+
+    [Fact]
     public async Task La_page_elle_meme_exige_le_jeton()
     {
         var request = new HttpRequestMessage(HttpMethod.Get, $"{_root}/");

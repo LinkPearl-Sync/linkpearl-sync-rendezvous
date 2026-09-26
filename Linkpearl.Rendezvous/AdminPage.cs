@@ -22,12 +22,11 @@ public static class AdminPage
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <meta name="robots" content="noindex, nofollow">
         <title>Linkpearl, service de rendez-vous</title>
-        <link rel="preconnect" href="https://fonts.googleapis.com">
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-        <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600&family=Nunito:wght@400;700;800&family=JetBrains+Mono:wght@400&display=swap">
         <style>
           /* Les couleurs, les polices et les formes du site public : la nuit du
-             logo. Sans réseau, les polices retombent sur celles du système. */
+             logo. Les polices ne sont pas chargées chez Google comme sur le
+             site : une feuille tierce lirait le DOM de la console. Elles servent
+             si la machine les a, sinon celles du système prennent le relais. */
           :root {
             color-scheme: dark;
             --deep: #07123a; --field: #040b26;
