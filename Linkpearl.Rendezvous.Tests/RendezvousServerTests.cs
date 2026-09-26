@@ -35,6 +35,32 @@ public sealed class RendezvousServerTests
     }
 
     [Fact]
+    public async Task Un_client_annonce_deux_fois_ne_s_apparie_pas_avec_lui_meme()
+    {
+        await using var harness = await ServerHarness.StartAsync();
+
+        // Le même client, arrivé par deux noms du même service : même jeton,
+        // même bloc scellé. Seul un autre client doit pouvoir l'apparier.
+        var first = await harness.ConnectAsync();
+        var second = await harness.ConnectAsync();
+        var partner = await harness.ConnectAsync();
+
+        // Dans cet ordre, attendu à chaque fois : deux sessions traitées en
+        // parallèle feraient attendre l'une ou l'autre selon l'ordonnanceur.
+        await first.SendAsync(Announce([7, 7, 7], Ticket(0x33)));
+        Assert.True(await first.IsSilentAsync(Short));
+
+        await second.SendAsync(Announce([7, 7, 7], Ticket(0x33)));
+        Assert.True(await second.IsSilentAsync(Short));
+        Assert.True(await first.IsSilentAsync(Short));
+
+        await partner.SendAsync(Announce([8, 8, 8], Ticket(0x33)));
+
+        Assert.Equal(new byte[] { 7, 7, 7 }, (await partner.ReadFrameAsync())![1..]);
+        Assert.Equal(new byte[] { 8, 8, 8 }, (await first.ReadFrameAsync())![1..]);
+    }
+
+    [Fact]
     public async Task Deux_annonces_du_meme_jeton_sont_appariees()
     {
         await using var harness = await ServerHarness.StartAsync();

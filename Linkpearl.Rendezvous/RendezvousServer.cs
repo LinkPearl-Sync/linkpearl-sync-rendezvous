@@ -636,6 +636,16 @@ public sealed class RendezvousServer(
 
         foreach (var key in keys)
         {
+            // Le même client, arrivé par deux noms de ce service (un nom et son
+            // IP, le service par défaut et son alias dans le cercle ouvert) :
+            // même jeton et même bloc scellé, que son aléa rend unique à chaque
+            // annonce. L'apparier avec lui-même lui renverrait ses propres
+            // candidats et consumerait l'attente que son vrai pair cherche.
+            if (_waiting.TryGetValue(key, out var self)
+                && ReferenceEquals(self.Session, session) is false
+                && self.SealedCandidates.AsSpan().SequenceEqual(announcement.SealedCandidates))
+                continue;
+
             // Un pair déjà en attente sur ce jeton, et qui n'est pas nous : on
             // échange les blocs, sans jamais les lire.
             if (_waiting.TryGetValue(key, out var partner)

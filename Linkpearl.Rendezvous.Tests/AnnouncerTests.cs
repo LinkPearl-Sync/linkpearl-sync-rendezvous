@@ -57,7 +57,16 @@ public sealed class AnnouncerTests
         await stop.CancelAsync();
         await announcing;
         listener.Stop();
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => directory);
+
+        // Le faux annuaire s'arrête par l'annulation, levée ou constatée en
+        // tête de boucle selon l'instant : les deux fins sont bonnes.
+        try
+        {
+            await directory;
+        }
+        catch (OperationCanceledException)
+        {
+        }
     }
 
     [Fact]
