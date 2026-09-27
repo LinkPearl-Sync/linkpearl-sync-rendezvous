@@ -366,4 +366,44 @@ public sealed class AuthorityLedgerTests : IDisposable
             File.Delete(path);
         }
     }
+
+    /// <summary>
+    /// Un registre listé, dont la région est réécrite à la main comme un
+    /// opérateur pourrait le faire, ou retirée comme dans un registre d'avant
+    /// les régions.
+    /// </summary>
+    private AuthorityLedger ReloadedWithRegion(string? region)
+    {
+        var ledger = Ledger("rdv.a.ch");
+        Run(ledger, TimeSpan.FromHours(72) + Round, Up, "rdv.a.ch");
+
+        var root = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(StatePath))!.AsObject();
+        var service = root["services"]!.AsArray().Single()!.AsObject();
+        service.Remove("region");
+
+        if (region is not null)
+            service["region"] = region;
+
+        File.WriteAllText(StatePath, root.ToJsonString());
+        return AuthorityLedger.Load(StatePath, _clock);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("eu")]
+    [InlineData("XX")]
+    [InlineData("EUR")]
+    public void Une_region_absente_ou_malformee_se_charge_sans_region_et_l_autorite_signe(string? region)
+    {
+        var reloaded = ReloadedWithRegion(region);
+
+        Assert.Null(Assert.Single(reloaded.Snapshot()).Region);
+
+        var listed = reloaded.Listed();
+        Assert.Null(Assert.Single(listed).Region);
+
+        using var key = System.Security.Cryptography.ECDsa.Create(System.Security.Cryptography.ECCurve.NamedCurves.nistP256);
+        var list = new ServiceConsensus(reloaded.NextVersion(), 0, (long)ServiceConsensus.Lifetime.TotalSeconds, listed);
+        Assert.NotEmpty(ServiceConsensus.SignV2(list, key));
+    }
 }

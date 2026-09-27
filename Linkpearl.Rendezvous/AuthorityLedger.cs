@@ -441,7 +441,11 @@ public sealed class AuthorityLedger
                     Successes = Need(item, "successes").GetValue<int>(),
                     Family = item["family"] is { } family ? Convert.FromHexString(family.GetValue<string>()) : null,
                     Vetoed = Need(item, "vetoed").GetValue<bool>(),
-                    Region = item["region"]?.GetValue<string>(),
+                    // Filtrée comme à la sonde : une région éditée à la main
+                    // (« eu », « XX ») ferait lever SignV2 à chaque émission et
+                    // arrêterait l'autorité. Sans région, le service reste
+                    // listé et en perd seulement la place régionale.
+                    Region = GeoIpRegions.Retained(item["region"]?.GetValue<string>()),
                 };
 
                 // Absent d'un registre d'avant la page publique : l'historique
