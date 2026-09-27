@@ -731,10 +731,10 @@ public sealed class RendezvousServer(
 
         // Coupé depuis la console : refusé sans compter dans le limiteur et
         // sans couper la session, qui a peut-être des boîtes ouvertes. Le
-        // plugin lit cette erreur comme un relais indisponible.
+        // plugin reconnaît ce texte partagé et écarte ce relais une journée.
         if (Limits.RelayEnabled is false)
         {
-            await session.SendAsync(RendezvousWire.Error("relais coupé sur ce service"), ct).ConfigureAwait(false);
+            await session.SendAsync(RendezvousWire.Error(RendezvousWire.RelayDisabledReason), ct).ConfigureAwait(false);
             return true;
         }
 

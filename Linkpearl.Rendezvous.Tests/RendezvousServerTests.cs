@@ -699,7 +699,7 @@ public sealed class RelaySwitchTests
         var frame = await client.ReadFrameAsync();
 
         Assert.Equal(RendezvousKind.Error, frame![0]);
-        Assert.Contains("relais", System.Text.Encoding.UTF8.GetString(frame, 1, frame.Length - 1));
+        Assert.Equal(RendezvousWire.RelayDisabledReason, System.Text.Encoding.UTF8.GetString(frame, 1, frame.Length - 1));
         Assert.Equal(0, harness.Server.Snapshot().RelayWaiting);
 
         // La connexion tient, et le refus n'a pas compté dans le limiteur.
