@@ -716,6 +716,30 @@ public sealed class AdminServerTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Admettre_a_la_main_un_service_en_probation_le_liste()
+    {
+        _authority.Ledger.Track(new DirectoryEntry("rdv.ami.ch", "Ami"), "203.0.113.9");
+        _authority.Ledger.Record("rdv.ami.ch", new ProbeResult(true, IPAddress.Parse("203.0.113.9")));
+
+        var response = await SendAsync(HttpMethod.Post, "/api/authority/admit", body: """{"address":"rdv.ami.ch"}""");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(ServiceStanding.Listed, _authority.Ledger.Snapshot().Single().Standing);
+        Assert.Contains(_authority.Current!.Entries, entry => entry.Address == "rdv.ami.ch:47900");
+    }
+
+    [Fact]
+    public async Task Admettre_un_candidat_jamais_joint_rend_409()
+    {
+        _authority.Ledger.Track(new DirectoryEntry("rdv.ami.ch", "Ami"), "203.0.113.9");
+
+        var response = await SendAsync(HttpMethod.Post, "/api/authority/admit", body: """{"address":"rdv.ami.ch"}""");
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.Contains("probation", await response.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
     public async Task Ecarter_sans_jeton_est_refuse()
     {
         var response = await SendAsync(

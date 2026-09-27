@@ -409,6 +409,37 @@ public sealed class AdminServer(
                 return;
             }
 
+            case ("/api/authority/admit", "POST"):
+            {
+                var body = await BodyAsync(context).ConfigureAwait(false);
+                var address = body?["address"]?.GetValue<string>() ?? "";
+                var outcome = Authority?.Ledger.Admit(address) ?? AdmitOutcome.Unknown;
+
+                if (outcome is AdmitOutcome.Admitted)
+                {
+                    // Réémise et republiée aussitôt : l'opérateur qui admet un
+                    // service veut le voir servi, pas attendre la ronde suivante.
+                    Authority!.IssueIfNeeded();
+                    Authority.RefreshStatus();
+                    Log.WriteLine($"Service admis à la main dans le réseau ouvert : {address}.");
+                }
+
+                var (status, reason) = outcome switch
+                {
+                    AdmitOutcome.Admitted => (200, null),
+                    AdmitOutcome.Unknown => (404, "service inconnu ou écarté"),
+                    AdmitOutcome.NotOnProbation => (409, "le service n'est pas en probation : il doit d'abord répondre aux sondes"),
+                    AdmitOutcome.NotAnswering => (409, "le service n'a pas répondu à la dernière sonde"),
+                    AdmitOutcome.FamilyFull => (409, "deux services de ce réseau (/24 ou /48) sont déjà listés"),
+                    _ => (409, "cinq services ont déjà été admis ces dernières 24 heures"),
+                };
+
+                Respond(context, status, "application/json", reason is null
+                    ? Result(true, address)
+                    : new JsonObject { ["error"] = reason, ["address"] = address }.ToJsonString());
+                return;
+            }
+
             default:
                 Respond(context, 404, "application/json", """{"error":"point d'entrée inconnu"}""");
                 return;

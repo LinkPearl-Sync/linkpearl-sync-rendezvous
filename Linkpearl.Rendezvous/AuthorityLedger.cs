@@ -9,6 +9,9 @@ namespace Linkpearl.Rendezvous;
 /// <summary>Ce qu'une sonde a vu : joint ou non, et à quelle adresse.</summary>
 public sealed record ProbeResult(bool Reached, IPAddress? Address);
 
+/// <summary>Ce qu'a donné une admission à la main, et pourquoi elle a pu être refusée.</summary>
+public enum AdmitOutcome { Admitted, Unknown, NotOnProbation, NotAnswering, FamilyFull, DailyCapReached }
+
 public enum ServiceStanding
 {
     Candidate,
@@ -203,6 +206,48 @@ public sealed class AuthorityLedger
             }
 
             SaveLocked();
+        }
+    }
+
+    /// <summary>
+    /// Admet tout de suite un service en probation, sans attendre ses 72 heures.
+    /// </summary>
+    /// <remarks>
+    /// Pour les services de l'opérateur lui-même : la probation sert à éprouver
+    /// des inconnus. Seule la durée est levée : le service doit répondre à la
+    /// dernière sonde, depuis l'adresse qui l'a proposé, et les bornes par
+    /// réseau et par jour tiennent, sans quoi un clic suffirait à les contourner.
+    /// </remarks>
+    public AdmitOutcome Admit(string address)
+    {
+        if (KeyOf(address) is not { } key)
+            return AdmitOutcome.Unknown;
+
+        lock (_gate)
+        {
+            if (_services.TryGetValue(key, out var service) is false || service.Vetoed)
+                return AdmitOutcome.Unknown;
+
+            if (service.ProbationStart is null)
+                return AdmitOutcome.NotOnProbation;
+
+            if (service.History.Count == 0 || service.History[^1] is false)
+                return AdmitOutcome.NotAnswering;
+
+            if (FamilyCount(service.Family) >= MaxPerFamily)
+                return AdmitOutcome.FamilyFull;
+
+            var now = _clock.UtcNow;
+            _admissions.RemoveAll(admitted => now - admitted >= Day);
+
+            if (_admissions.Count >= MaxAdmissionsPerDay)
+                return AdmitOutcome.DailyCapReached;
+
+            service.ListedAt = now;
+            service.ProbationStart = null;
+            _admissions.Add(now);
+            SaveLocked();
+            return AdmitOutcome.Admitted;
         }
     }
 

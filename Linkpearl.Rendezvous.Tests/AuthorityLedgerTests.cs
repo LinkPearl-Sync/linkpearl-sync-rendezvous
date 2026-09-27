@@ -226,6 +226,62 @@ public sealed class AuthorityLedgerTests : IDisposable
     }
 
     [Fact]
+    public void Un_service_en_probation_qui_repond_s_admet_a_la_main()
+    {
+        var ledger = Ledger("rdv.a.ch");
+        Run(ledger, TimeSpan.FromHours(2), Up, "rdv.a.ch");
+
+        Assert.Equal(AdmitOutcome.Admitted, ledger.Admit("rdv.a.ch"));
+        Assert.Equal("rdv.a.ch:47900", Assert.Single(ledger.Listed()).Address);
+    }
+
+    [Fact]
+    public void Un_service_muet_a_la_derniere_sonde_ne_s_admet_pas()
+    {
+        var ledger = Ledger("rdv.a.ch");
+        Run(ledger, TimeSpan.FromHours(2), Up, "rdv.a.ch");
+        Run(ledger, Round, Down, "rdv.a.ch");
+
+        Assert.Equal(AdmitOutcome.NotAnswering, ledger.Admit("rdv.a.ch"));
+        Assert.Empty(ledger.Listed());
+    }
+
+    [Fact]
+    public void Un_candidat_jamais_joint_ne_s_admet_pas()
+    {
+        var ledger = Ledger("rdv.a.ch");
+
+        Assert.Equal(AdmitOutcome.NotOnProbation, ledger.Admit("rdv.a.ch"));
+        Assert.Equal(AdmitOutcome.Unknown, ledger.Admit("rdv.inconnu.ch"));
+    }
+
+    [Fact]
+    public void L_admission_a_la_main_garde_la_borne_par_reseau()
+    {
+        _where["rdv.a.ch"] = IPAddress.Parse("203.0.113.1");
+        _where["rdv.b.ch"] = IPAddress.Parse("203.0.113.2");
+        _where["rdv.c.ch"] = IPAddress.Parse("203.0.113.3");
+        var ledger = Ledger("rdv.a.ch", "rdv.b.ch", "rdv.c.ch");
+        Run(ledger, TimeSpan.FromHours(73), Up, "rdv.a.ch", "rdv.b.ch", "rdv.c.ch");
+
+        Assert.Equal(AdmitOutcome.FamilyFull, ledger.Admit("rdv.c.ch"));
+        Assert.Equal(2, ledger.Listed().Count);
+    }
+
+    [Fact]
+    public void L_admission_a_la_main_garde_le_plafond_du_jour()
+    {
+        string[] six = ["rdv.a.ch", "rdv.b.ch", "rdv.c.ch", "rdv.d.ch", "rdv.e.ch", "rdv.f.ch"];
+        var ledger = Ledger(six);
+        Run(ledger, TimeSpan.FromHours(2), Up, six);
+
+        foreach (var address in six[..5])
+            Assert.Equal(AdmitOutcome.Admitted, ledger.Admit(address));
+
+        Assert.Equal(AdmitOutcome.DailyCapReached, ledger.Admit("rdv.f.ch"));
+    }
+
+    [Fact]
     public void Ecarter_un_service_inconnu_ne_fait_rien()
         => Assert.False(Ledger().Veto("rdv.inconnu.ch"));
 

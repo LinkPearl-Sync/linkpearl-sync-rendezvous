@@ -259,6 +259,7 @@ de commande ou en authentification basique pour le navigateur.
 | `PUT /api/settings` | Change des réglages, à chaud et dans `settings.json` ; 400 hors bornes |
 | `POST /api/authority/veto` | Écarte un service du réseau ouvert ; 404 s'il n'est pas suivi |
 | `DELETE /api/authority/veto` | Rétablit un service écarté, qui repart en candidat |
+| `POST /api/authority/admit` | Admet tout de suite un service en probation qui répond ; 409 sinon, avec la raison |
 
 ## Le réseau ouvert
 
@@ -278,7 +279,9 @@ jour même inchangée ; les probations vivent dans `authority.json` (`--authorit
 
 La console montre la clé publique, la version émise, et chaque service suivi avec son
 état et son taux de réussite. « Écarter » retire un service tout de suite ; l'admission se
-passe de geste humain, le retrait non.
+passe de geste humain, le retrait non. « Admettre » lève la durée de probation d'un service
+qui répond, pour les services de l'opérateur lui-même : les bornes par réseau et par jour
+tiennent toujours.
 
 L'autorité sert, sur son port habituel et non sur la console, la liste signée
 (`ConsensusQuery`) et l'état public du réseau (`NetworkStatusQuery` 0x19, réponse

@@ -532,6 +532,13 @@ public static class AdminPage
           return b;
         }
 
+        // Plusieurs boutons dans une même cellule : ligne() n'en prend qu'un nœud.
+        function boutons(...liste) {
+          const f = document.createDocumentFragment();
+          liste.filter(Boolean).forEach(b => f.append(b));
+          return f;
+        }
+
         function etatAutorite(p) {
           const noms = { Candidate: "candidat", Probation: "en probation", Listed: "listé", Delisted: "sorti", Vetoed: "écarté" };
           const ratio = p.probes ? " (" + Math.round(100 * p.successes / p.probes) + " %)" : "";
@@ -643,10 +650,18 @@ public static class AdminPage
               p.address, p.label || "", etatAutorite(p),
               p.standing === "Vetoed"
                 ? bouton("rétablir", false, () => agir("/api/authority/veto", "DELETE", { address: p.address }, p.address + " rétabli"))
-                : bouton("écarter", true, () => {
-                    if (confirm("Écarter " + p.address + " du réseau ouvert ?"))
-                      return agir("/api/authority/veto", "POST", { address: p.address }, p.address + " écarté");
-                  })
+                : boutons(
+                    p.standing === "Probation"
+                      ? bouton("admettre", false, () => {
+                          if (confirm("Admettre " + p.address + " dans le réseau ouvert sans attendre la fin de sa probation ?"))
+                            return agir("/api/authority/admit", "POST", { address: p.address }, p.address + " admis");
+                        })
+                      : null,
+                    bouton("écarter", true, () => {
+                      if (confirm("Écarter " + p.address + " du réseau ouvert ?"))
+                        return agir("/api/authority/veto", "POST", { address: p.address }, p.address + " écarté");
+                    })
+                  )
             ])), "aucun service suivi. Une candidature reçue par --announce-to apparaît ici après la prochaine sonde.");
           }
 
