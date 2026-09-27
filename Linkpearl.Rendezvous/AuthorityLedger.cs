@@ -81,6 +81,11 @@ public sealed class AuthorityLedger
     /// Un service n'entre que s'il répond depuis cette adresse-là : sans ce
     /// lien, n'importe qui inscrirait au réseau ouvert le service d'un autre,
     /// ou l'alias d'un service d'ancrage, sans l'accord de son opérateur.
+    ///
+    /// Un service déjà suivi qui se représente depuis la même adresse prend son
+    /// nouveau libellé : c'est ainsi qu'un opérateur renomme le sien. Le même
+    /// lien empêche un tiers de renommer le service d'un autre. Rend vrai
+    /// seulement pour une nouvelle candidature.
     /// </remarks>
     public bool Track(DirectoryEntry entry, string submitter)
     {
@@ -89,7 +94,18 @@ public sealed class AuthorityLedger
 
         lock (_gate)
         {
-            if (_services.ContainsKey(key) || _services.Count >= MaxTracked)
+            if (_services.TryGetValue(key, out var known))
+            {
+                if (known.Submitter == submitter && known.Label != entry.Label)
+                {
+                    known.Label = entry.Label;
+                    SaveLocked();
+                }
+
+                return false;
+            }
+
+            if (_services.Count >= MaxTracked)
                 return false;
 
             _services[key] = new Service { Address = key, Label = entry.Label, Submitter = submitter, FirstSeen = _clock.UtcNow };
@@ -440,7 +456,7 @@ public sealed class AuthorityLedger
     private sealed class Service
     {
         public required string Address { get; init; }
-        public required string Label { get; init; }
+        public required string Label { get; set; }
         public required string Submitter { get; init; }
         public required DateTimeOffset FirstSeen { get; init; }
         public DateTimeOffset? LastSuccess { get; set; }

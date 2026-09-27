@@ -100,6 +100,31 @@ public sealed class AuthorityLedgerTests : IDisposable
     }
 
     [Fact]
+    public void Un_service_connu_change_son_libelle_depuis_son_adresse()
+    {
+        var ledger = AuthorityLedger.Load(StatePath, _clock);
+        var submitter = AddressBucket.Of(Where("rdv.a.ch"));
+        Assert.True(ledger.Track(new DirectoryEntry("rdv.a.ch", "Ancien"), submitter));
+
+        // Déjà suivi : ce n'est pas une nouvelle candidature, seulement un nom.
+        Assert.False(ledger.Track(new DirectoryEntry("rdv.a.ch", "Nouveau"), submitter));
+
+        Assert.Equal("Nouveau", ledger.Snapshot().Single().Label);
+        Assert.Equal("Nouveau", AuthorityLedger.Load(StatePath, _clock).Snapshot().Single().Label);
+    }
+
+    [Fact]
+    public void Un_tiers_ne_renomme_pas_le_service_d_un_autre()
+    {
+        var ledger = AuthorityLedger.Load(StatePath, _clock);
+        Assert.True(ledger.Track(new DirectoryEntry("rdv.a.ch", "Le vrai"), AddressBucket.Of(Where("rdv.a.ch"))));
+
+        Assert.False(ledger.Track(new DirectoryEntry("rdv.a.ch", "Usurpé"), "192.0.2.50"));
+
+        Assert.Equal("Le vrai", ledger.Snapshot().Single().Label);
+    }
+
+    [Fact]
     public void Un_service_propose_par_un_tiers_n_entre_jamais()
     {
         // La candidature vient d'une autre adresse que celle où le service
