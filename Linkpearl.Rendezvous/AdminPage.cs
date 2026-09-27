@@ -290,6 +290,7 @@ public static class AdminPage
                   <tbody id="autorite"></tbody>
                 </table>
               </div>
+              <p class="doux" style="margin:.5rem 0 0">Régions : DB-IP IP to Country Lite, CC BY 4.0</p>
             </div>
           </div>
 

@@ -115,6 +115,12 @@ public sealed class AdminServerTests : IAsyncLifetime
     }
 
     [Fact]
+    public void La_page_attribue_les_regions_a_db_ip()
+        // Exigé par la licence CC BY 4.0 de la base. Sans lien : la page ne
+        // pointe vers aucun tiers.
+        => Assert.Contains("Régions : DB-IP IP to Country Lite, CC BY 4.0", AdminPage.Html);
+
+    [Fact]
     public async Task La_page_elle_meme_exige_le_jeton()
     {
         var request = new HttpRequestMessage(HttpMethod.Get, $"{_root}/");

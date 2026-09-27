@@ -289,7 +289,8 @@ qui répond, pour les services de l'opérateur lui-même : les bornes par résea
 tiennent toujours.
 
 L'autorité sert, sur son port habituel et non sur la console, la liste signée
-(`ConsensusQuery`) et l'état public du réseau (`NetworkStatusQuery` 0x19, réponse
+(`ConsensusQuery`, et sa version à régions `ConsensusV2Query` 0x1B, réponse `ConsensusV2Page`
+0x1C) et l'état public du réseau (`NetworkStatusQuery` 0x19, réponse
 `NetworkStatusPage` 0x1A, par tranches de 32 Kio et seize pages au plus). Un service ordinaire
 répond qu'il ne le publie pas. Cet état, recalculé à chaque ronde de sondes, est relevé chaque
 heure par le site et affiché sur <https://linkpearl-sync.github.io/reseau.html> : les services
