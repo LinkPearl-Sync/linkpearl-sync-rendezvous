@@ -11,6 +11,9 @@ public interface IConsensusSource
 
     /// <summary>L'état public du réseau, en JSON, pour la page du site.</summary>
     byte[]? Status => null;
+
+    /// <summary>La liste signée v2, avec les régions, s'il y en a une.</summary>
+    byte[]? DocumentV2 => null;
 }
 
 /// <summary>
@@ -23,7 +26,7 @@ public interface IConsensusSource
 /// reste composé à la main par chaque utilisateur.
 /// </remarks>
 public sealed class AuthorityService(
-    AuthorityLedger ledger, IServiceProbe probe, ECDsa key, IClock clock) : IConsensusSource
+    AuthorityLedger ledger, IServiceProbe probe, ECDsa key, IClock clock, IRegionLookup? regions = null) : IConsensusSource
 {
     public static readonly TimeSpan Interval = TimeSpan.FromMinutes(10);
 
@@ -35,6 +38,7 @@ public sealed class AuthorityService(
     private readonly Lock _gate = new();
     private ServiceConsensus? _current;
     private byte[]? _document;
+    private byte[]? _documentV2;
     private byte[]? _status;
 
     public TextWriter Log { get; init; } = Console.Out;
@@ -49,6 +53,15 @@ public sealed class AuthorityService(
         {
             lock (_gate)
                 return _document;
+        }
+    }
+
+    public byte[]? DocumentV2
+    {
+        get
+        {
+            lock (_gate)
+                return _documentV2;
         }
     }
 
@@ -112,8 +125,11 @@ public sealed class AuthorityService(
             new ParallelOptions { MaxDegreeOfParallelism = Parallelism, CancellationToken = ct },
             async (address, token) =>
             {
-                if (RendezvousAddress.TryParse(address, out var at, out _))
-                    ledger.Record(address, await probe.ProbeAsync(at, token).ConfigureAwait(false));
+                if (RendezvousAddress.TryParse(address, out var at, out _) is false)
+                    return;
+
+                var result = await probe.ProbeAsync(at, token).ConfigureAwait(false);
+                ledger.Record(address, result, result.Address is { } reached ? regions?.RegionOf(reached) : null);
             }).ConfigureAwait(false);
 
         ledger.Settle();
@@ -143,6 +159,7 @@ public sealed class AuthorityService(
                 ledger.NextVersion(), now, now + (long)ServiceConsensus.Lifetime.TotalSeconds, listed);
 
             _document = ServiceConsensus.Sign(list, key);
+            _documentV2 = ServiceConsensus.SignV2(list, key);
             _current = list;
             Log.WriteLine($"Liste signée émise : version {list.Version}, {listed.Count} service(s).");
         }
@@ -152,5 +169,6 @@ public sealed class AuthorityService(
         => one.Count == other.Count && one.Zip(other).All(pair =>
             pair.First.Address == pair.Second.Address
             && pair.First.Label == pair.Second.Label
-            && pair.First.Family.AsSpan().SequenceEqual(pair.Second.Family));
+            && pair.First.Family.AsSpan().SequenceEqual(pair.Second.Family)
+            && pair.First.Region == pair.Second.Region);
 }

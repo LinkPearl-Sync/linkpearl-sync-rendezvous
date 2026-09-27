@@ -17,11 +17,21 @@ internal sealed class ScriptedProbe : IServiceProbe
 }
 
 /// <summary>Une source de liste fixe, pour tester le service de pages.</summary>
-internal sealed class FixedConsensus(byte[]? document, byte[]? status = null) : IConsensusSource
+internal sealed class FixedConsensus(byte[]? document, byte[]? status = null, byte[]? documentV2 = null) : IConsensusSource
 {
     public byte[]? Document => document;
 
     public byte[]? Status => status;
+
+    public byte[]? DocumentV2 => documentV2;
+}
+
+/// <summary>Une géolocalisation scriptée : chaque adresse citée reçoit sa région.</summary>
+internal sealed class ScriptedRegions : IRegionLookup
+{
+    public Dictionary<IPAddress, string> Known { get; } = [];
+
+    public string? RegionOf(IPAddress address) => Known.GetValueOrDefault(address);
 }
 
 public sealed class AuthorityServiceTests : IDisposable
@@ -31,12 +41,13 @@ public sealed class AuthorityServiceTests : IDisposable
     private readonly ScriptedProbe _probe = new();
     private readonly ECDsa _key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
     private readonly AuthorityService _authority;
+    private readonly ScriptedRegions _regions = new();
 
     public AuthorityServiceTests()
     {
         Directory.CreateDirectory(_dir);
         _authority = new AuthorityService(
-            AuthorityLedger.Load(Path.Combine(_dir, "authority.json"), _clock), _probe, _key, _clock)
+            AuthorityLedger.Load(Path.Combine(_dir, "authority.json"), _clock), _probe, _key, _clock, _regions)
         {
             Log = TextWriter.Null,
         };
@@ -215,5 +226,86 @@ public sealed class AuthorityServiceTests : IDisposable
         Assert.NotEmpty(frames);
         Assert.All(frames, frame => Assert.Equal(RendezvousKind.Error, frame[0]));
         Assert.True(frames.Count < 4, "la connexion est restée ouverte");
+    }
+
+    [Fact]
+    public async Task Un_service_liste_porte_sa_region_dans_la_v2_et_pas_dans_la_v1()
+    {
+        _authority.Ledger.Track(new DirectoryEntry("rdv.candidat.ch", "Candidat"), "203.0.113.7");
+        _probe.Up["rdv.candidat.ch:47900"] = IPAddress.Parse("203.0.113.7");
+        _regions.Known[IPAddress.Parse("203.0.113.7")] = "NA";
+
+        for (var round = 0; round <= 432; round++)
+        {
+            await _authority.RoundAsync(CancellationToken.None);
+            _clock.Advance(AuthorityService.Interval);
+        }
+
+        var now = _clock.UtcNow.ToUnixTimeSeconds();
+
+        Assert.True(ServiceConsensus.TryVerify(_authority.DocumentV2!, [_authority.PublicPoint], now, out var v2, out var why), why);
+        Assert.Equal("NA", Assert.Single(v2!.Entries).Region);
+
+        Assert.True(ServiceConsensus.TryVerify(_authority.Document!, [_authority.PublicPoint], now, out var v1, out why), why);
+        Assert.Null(Assert.Single(v1!.Entries).Region);
+        Assert.Equal(v1.Version, v2.Version);
+    }
+
+    [Fact]
+    public async Task Une_region_qui_change_fait_reemettre_la_liste()
+    {
+        _authority.Ledger.Track(new DirectoryEntry("rdv.candidat.ch", "Candidat"), "203.0.113.7");
+        _probe.Up["rdv.candidat.ch:47900"] = IPAddress.Parse("203.0.113.7");
+
+        for (var round = 0; round <= 432; round++)
+        {
+            await _authority.RoundAsync(CancellationToken.None);
+            _clock.Advance(AuthorityService.Interval);
+        }
+
+        var before = _authority.Current!.Version;
+        _regions.Known[IPAddress.Parse("203.0.113.7")] = "EU";
+        await _authority.RoundAsync(CancellationToken.None);
+
+        Assert.True(_authority.Current!.Version > before);
+        Assert.Equal("EU", Assert.Single(_authority.Current.Entries).Region);
+    }
+
+    [Fact]
+    public async Task Le_service_sert_la_v2_par_pages_et_toujours_la_v1()
+    {
+        var v1 = RandomNumberGenerator.GetBytes(40_000);
+        var v2 = RandomNumberGenerator.GetBytes(40_000);
+        await using var harness = await ServerHarness.StartAsync(consensus: new FixedConsensus(v1, documentV2: v2));
+        using var client = await harness.ConnectAsync();
+        var received = new List<byte>();
+
+        for (var page = 0; page < 2; page++)
+        {
+            await client.SendAsync(RendezvousWire.ConsensusV2Query(page));
+            var frame = await client.ReadFrameAsync();
+
+            Assert.True(RendezvousWire.TryReadConsensusV2Page(frame!, out var index, out var pages, out var chunk, out var why), why);
+            Assert.Equal(page, index);
+            Assert.Equal(2, pages);
+            received.AddRange(chunk);
+        }
+
+        Assert.Equal(v2, received.ToArray());
+
+        await client.SendAsync(RendezvousWire.ConsensusQuery(0));
+        Assert.True(RendezvousWire.TryReadConsensusPage((await client.ReadFrameAsync())!, out _, out _, out var first, out _));
+        Assert.Equal(v1.AsSpan(0, first.Length).ToArray(), first);
+    }
+
+    [Fact]
+    public async Task Sans_v2_le_service_refuse_poliment_la_demande_v2()
+    {
+        await using var harness = await ServerHarness.StartAsync(consensus: new FixedConsensus(new byte[] { 1 }));
+        using var client = await harness.ConnectAsync();
+
+        await client.SendAsync(RendezvousWire.ConsensusV2Query(0));
+
+        Assert.Equal(RendezvousKind.Error, (await client.ReadFrameAsync())![0]);
     }
 }

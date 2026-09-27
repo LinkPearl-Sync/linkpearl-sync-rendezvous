@@ -478,6 +478,7 @@ public sealed class RendezvousServer(
                     RendezvousKind.DirectorySubmit => HandleDirectorySubmit(session, frame),
                     RendezvousKind.BanListQuery => await HandleBanListQueryAsync(session, frame, ct).ConfigureAwait(false),
                     RendezvousKind.ConsensusQuery => await HandleConsensusQueryAsync(session, frame, ct).ConfigureAwait(false),
+                    RendezvousKind.ConsensusV2Query => await HandleConsensusV2QueryAsync(session, frame, ct).ConfigureAwait(false),
             RendezvousKind.NetworkStatusQuery => await HandleNetworkStatusQueryAsync(session, frame, ct).ConfigureAwait(false),
                     _ => false,
                 };
@@ -587,6 +588,11 @@ public sealed class RendezvousServer(
         => RendezvousWire.TryReadConsensusQuery(frame, out var page)
             ? ServeChunksAsync(session, page, Consensus?.Document, "ce service ne publie pas de liste signée", RendezvousWire.ConsensusPage, ct)
             : RefuseAsync(session, "demande de liste signée malformée", ct);
+
+    private Task<bool> HandleConsensusV2QueryAsync(PeerSession session, byte[] frame, CancellationToken ct)
+        => RendezvousWire.TryReadConsensusV2Query(frame, out var page)
+            ? ServeChunksAsync(session, page, Consensus?.DocumentV2, "ce service ne publie pas de liste signée v2", RendezvousWire.ConsensusV2Page, ct)
+            : RefuseAsync(session, "demande de liste signée v2 malformée", ct);
 
     private Task<bool> HandleNetworkStatusQueryAsync(PeerSession session, byte[] frame, CancellationToken ct)
         => RendezvousWire.TryReadNetworkStatusQuery(frame, out var page)

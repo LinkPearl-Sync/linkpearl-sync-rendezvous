@@ -343,4 +343,27 @@ public sealed class AuthorityLedgerTests : IDisposable
         Assert.Throws<InvalidOperationException>(() => AuthorityLedger.Load(StatePath, _clock));
         Assert.Equal("{ pas du json", File.ReadAllText(StatePath));
     }
+
+    [Fact]
+    public void La_region_survit_a_un_redemarrage()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"lprdv-ledger-{Guid.NewGuid():N}.json");
+        var clock = new ManualClock();
+
+        try
+        {
+            var ledger = AuthorityLedger.Load(path, clock);
+            ledger.Track(new DirectoryEntry("rdv.candidat.ch", "Candidat"), "203.0.113.7");
+            ledger.Record("rdv.candidat.ch", new ProbeResult(true, IPAddress.Parse("203.0.113.7")), "OC");
+            ledger.Settle();
+
+            var reloaded = AuthorityLedger.Load(path, clock);
+
+            Assert.Equal("OC", Assert.Single(reloaded.Snapshot()).Region);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
 }

@@ -647,7 +647,7 @@ public static class AdminPage
               ? " · version " + a.version + ", valable jusqu'au " + new Date(a.expires * 1000).toLocaleString()
               : " · aucune liste émise");
             remplir($("autorite"), a.services.map(p => ligne([
-              p.address, p.label || "", etatAutorite(p),
+              p.address, (p.label || "") + (p.region ? " · " + p.region : ""), etatAutorite(p),
               p.standing === "Vetoed"
                 ? bouton("rétablir", false, () => agir("/api/authority/veto", "DELETE", { address: p.address }, p.address + " rétabli"))
                 : boutons(

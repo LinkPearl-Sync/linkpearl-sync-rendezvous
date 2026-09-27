@@ -538,6 +538,7 @@ public sealed class AdminServer(
             {
                 ["address"] = service.Address,
                 ["label"] = service.Label,
+                ["region"] = service.Region,
                 ["standing"] = service.Standing.ToString(),
                 ["probes"] = service.Probes,
                 ["successes"] = service.Successes,

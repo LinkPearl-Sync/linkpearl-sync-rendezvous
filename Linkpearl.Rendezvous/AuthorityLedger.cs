@@ -25,7 +25,7 @@ public enum ServiceStanding
 public sealed record TrackedService(
     string Address, string Label, ServiceStanding Standing, int Probes, int Successes,
     DateTimeOffset FirstSeen, DateTimeOffset? LastSuccess, DateTimeOffset? ProbationStart, DateTimeOffset? ListedAt,
-    DateTimeOffset? DelistedAt = null, double? Availability24h = null);
+    DateTimeOffset? DelistedAt = null, double? Availability24h = null, string? Region = null);
 
 /// <summary>
 /// Qui est candidat, qui est en probation, qui est listé.
@@ -113,7 +113,7 @@ public sealed class AuthorityLedger
         }
     }
 
-    public void Record(string address, ProbeResult result)
+    public void Record(string address, ProbeResult result, string? region = null)
     {
         if (KeyOf(address) is not { } key)
             return;
@@ -135,6 +135,12 @@ public sealed class AuthorityLedger
                 var previous = service.LastSuccess;
                 service.LastSuccess = now;
                 service.Family = ServiceConsensus.Family(reachedAt);
+
+                // Relue à chaque sonde réussie : une base GeoIP absente ou
+                // périmée efface la région, et le service retombe dans le
+                // tirage global plutôt que de garder une région qu'on ne sait
+                // plus justifier.
+                service.Region = region;
 
                 // Un long silence en probation ne se rattrape pas au ratio : la
                 // fenêtre grandirait sans fin. La probation recommence au retour.
@@ -312,7 +318,7 @@ public sealed class AuthorityLedger
             return _services.Values
                 .Where(service => service.ListedAt is not null)
                 .OrderBy(service => service.Address, StringComparer.Ordinal)
-                .Select(service => new ConsensusEntry(service.Address, service.Label, service.Family!))
+                .Select(service => new ConsensusEntry(service.Address, service.Label, service.Family!, service.Region))
                 .ToList();
     }
 
@@ -325,7 +331,8 @@ public sealed class AuthorityLedger
                     service.Address, service.Label, StandingOf(service), service.Probes, service.Successes,
                     service.FirstSeen, service.LastSuccess, service.ProbationStart, service.ListedAt,
                     service.DelistedAt,
-                    service.History.Count is 0 ? null : (double)service.History.Count(ok => ok) / service.History.Count))
+                    service.History.Count is 0 ? null : (double)service.History.Count(ok => ok) / service.History.Count,
+                    service.Region))
                 .ToList();
     }
 
@@ -387,6 +394,7 @@ public sealed class AuthorityLedger
                 ["family"] = service.Family is null ? null : Convert.ToHexStringLower(service.Family),
                 ["vetoed"] = service.Vetoed,
                 ["history"] = string.Concat(service.History.Select(ok => ok ? '1' : '0')),
+                ["region"] = service.Region,
             });
 
         var admissions = new JsonArray();
@@ -433,6 +441,7 @@ public sealed class AuthorityLedger
                     Successes = Need(item, "successes").GetValue<int>(),
                     Family = item["family"] is { } family ? Convert.FromHexString(family.GetValue<string>()) : null,
                     Vetoed = Need(item, "vetoed").GetValue<bool>(),
+                    Region = item["region"]?.GetValue<string>(),
                 };
 
                 // Absent d'un registre d'avant la page publique : l'historique
@@ -467,6 +476,7 @@ public sealed class AuthorityLedger
         public int Successes { get; set; }
         public byte[]? Family { get; set; }
         public bool Vetoed { get; set; }
+        public string? Region { get; set; }
         public List<bool> History { get; } = [];
     }
 }
