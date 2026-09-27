@@ -21,6 +21,55 @@ internal sealed class ScriptedHandler : HttpMessageHandler
     }
 }
 
+/// <summary>Lève une fois, comme une panne réseau ponctuelle, puis rend un 404.</summary>
+internal sealed class ThrowingOnceHandler : HttpMessageHandler
+{
+    private bool _thrown;
+
+    public int Calls { get; private set; }
+
+    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+    {
+        Calls++;
+
+        if (_thrown is false)
+        {
+            _thrown = true;
+            throw new InvalidOperationException("panne inattendue");
+        }
+
+        return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
+    }
+}
+
+/// <summary>Un flux qui lève dès la première lecture, comme une connexion coupée.</summary>
+internal sealed class ThrowingStream : Stream
+{
+    public override bool CanRead => true;
+    public override bool CanSeek => false;
+    public override bool CanWrite => false;
+    public override long Length => throw new NotSupportedException();
+    public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+
+    public override void Flush() { }
+
+    public override int Read(byte[] buffer, int offset, int count) => throw new IOException("connexion perdue");
+
+    public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken ct) => throw new IOException("connexion perdue");
+
+    public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+    public override void SetLength(long value) => throw new NotSupportedException();
+
+    public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+}
+
+internal sealed class FaultyHandler : HttpMessageHandler
+{
+    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(new ThrowingStream()) });
+}
+
 public sealed class GeoIpUpdaterTests : IDisposable
 {
     private readonly string _dir = Path.Combine(Path.GetTempPath(), $"lprdv-geoip-{Guid.NewGuid():N}");
@@ -104,6 +153,43 @@ public sealed class GeoIpUpdaterTests : IDisposable
         var updater = new GeoIpUpdater(regions, path, new HttpClient(_web), _clock) { Log = TextWriter.Null };
 
         Assert.False(await updater.RefreshIfNeededAsync(CancellationToken.None));
+        Assert.Equal(Fixture, File.ReadAllBytes(path));
+    }
+
+    [Fact]
+    public async Task Une_exception_inattendue_n_arrete_pas_la_boucle_de_mise_a_jour()
+    {
+        var handler = new ThrowingOnceHandler();
+        var path = Path.Combine(_dir, "geoip.mmdb");
+        using var regions = new GeoIpRegions(path, _clock);
+        var updater = new GeoIpUpdater(regions, path, new HttpClient(handler), _clock) { Log = TextWriter.Null };
+
+        using var stopping = new CancellationTokenSource();
+
+        // La première ronde échoue par une panne qui n'est ni HTTP, ni IO, ni
+        // une annulation : la boucle doit l'avaler et continuer, plutôt que
+        // de faire échouer toute la tâche attendue par Program.cs.
+        var running = updater.RunAsync(stopping.Token);
+        stopping.Cancel();
+
+        await running;
+
+        Assert.True(handler.Calls >= 1);
+    }
+
+    [Fact]
+    public async Task Une_panne_reseau_pendant_le_telechargement_ne_laisse_pas_de_fichier_temporaire()
+    {
+        var path = Path.Combine(_dir, "geoip.mmdb");
+        File.WriteAllBytes(path, Fixture);
+        using var regions = new GeoIpRegions(path, _clock);
+        _clock.Set(regions.BuildDate!.Value + GeoIpUpdater.RefreshAfter + TimeSpan.FromDays(1));
+
+        var updater = new GeoIpUpdater(regions, path, new HttpClient(new FaultyHandler()), _clock) { Log = TextWriter.Null };
+
+        await Assert.ThrowsAsync<IOException>(() => updater.RefreshIfNeededAsync(CancellationToken.None));
+
+        Assert.False(File.Exists(path + ".tmp"));
         Assert.Equal(Fixture, File.ReadAllBytes(path));
     }
 

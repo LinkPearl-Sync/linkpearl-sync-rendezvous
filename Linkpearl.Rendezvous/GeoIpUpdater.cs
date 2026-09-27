@@ -32,9 +32,11 @@ public sealed class GeoIpUpdater(GeoIpRegions regions, string path, HttpClient h
             {
                 await RefreshIfNeededAsync(ct).ConfigureAwait(false);
             }
-            catch (Exception e) when (e is HttpRequestException or IOException or TaskCanceledException && ct.IsCancellationRequested is false)
+            catch (Exception e) when (e is not OperationCanceledException)
             {
-                Log.WriteLine($"Base GeoIP non renouvelée : {e.Message}");
+                // Une mise à jour ratée n'arrête pas le service : la base en
+                // place reste servie, et la prochaine ronde réessaie.
+                Log.WriteLine($"Base GeoIP non renouvelée ({e.GetType().Name}) : {e.Message}");
             }
 
             try
@@ -95,6 +97,14 @@ public sealed class GeoIpUpdater(GeoIpRegions regions, string path, HttpClient h
                 File.Delete(temporary);
                 Log.WriteLine($"{e.Message}, la base en place est gardée.");
                 return false;
+            }
+            catch
+            {
+                // Toute autre panne (réseau coupé, disque plein) ne doit pas
+                // laisser un fichier à moitié écrit derrière elle : on nettoie
+                // avant de laisser l'erreur remonter à RunAsync.
+                File.Delete(temporary);
+                throw;
             }
 
             File.Move(temporary, path, overwrite: true);
