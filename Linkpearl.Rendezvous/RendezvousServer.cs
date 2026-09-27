@@ -663,7 +663,7 @@ public sealed class RendezvousServer(
         foreach (var key in keys)
         {
             // Le même client, arrivé par deux noms de ce service (un nom et son
-            // IP, le service par défaut et son alias dans le cercle ouvert) :
+            // IP, le service par défaut et son alias dans le réseau ouvert) :
             // même jeton et même bloc scellé, que son aléa rend unique à chaque
             // annonce. L'apparier avec lui-même lui renverrait ses propres
             // candidats et consumerait l'attente que son vrai pair cherche.

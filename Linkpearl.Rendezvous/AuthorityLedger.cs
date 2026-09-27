@@ -30,8 +30,8 @@ public sealed record TrackedService(
 /// <remarks>
 /// L'admission se passe du geste humain : c'est le temps qui juge. Les bornes
 /// par famille et par jour n'empêchent pas un acteur patient de peupler une
-/// part du cercle, elles bornent sa vitesse et sa concentration. Cela suffit
-/// parce qu'un service du cercle ouvert ne voit jamais passer une clé.
+/// part du réseau, elles bornent sa vitesse et sa concentration. Cela suffit
+/// parce qu'un service du réseau ouvert ne voit jamais passer une clé.
 ///
 /// Persisté après chaque ronde : un redémarrage ne doit pas remettre trois
 /// jours de probation à zéro.
@@ -76,7 +76,7 @@ public sealed class AuthorityLedger
     /// <summary>Suit une candidature, liée à l'adresse (ou au /64) qui l'a soumise.</summary>
     /// <remarks>
     /// Un service n'entre que s'il répond depuis cette adresse-là : sans ce
-    /// lien, n'importe qui inscrirait au cercle ouvert le service d'un autre,
+    /// lien, n'importe qui inscrirait au réseau ouvert le service d'un autre,
     /// ou l'alias d'un service d'ancrage, sans l'accord de son opérateur.
     /// </remarks>
     public bool Track(DirectoryEntry entry, string submitter)
@@ -386,7 +386,7 @@ public sealed class AuthorityLedger
         {
             // Jamais réécrit : il porte des jours de probation, et le remettre
             // à zéro en silence ferait attendre trois jours de plus à tout le
-            // cercle sans que personne sache pourquoi.
+            // réseau sans que personne sache pourquoi.
             throw new InvalidOperationException(
                 $"{_path} illisible : le corriger ou le retirer à la main avant de redémarrer.", e);
         }

@@ -11,7 +11,7 @@ namespace Linkpearl.Rendezvous;
 /// La seule connexion sortante d'un service ordinaire : une candidature au
 /// démarrage, puis une par jour. Hors de là il ne consulte jamais un autre
 /// annuaire, ne vérifie jamais un autre service, et ne propage jamais ce qu'il
-/// a reçu. Une autorité du cercle ouvert en ouvre d'autres, vers les candidats
+/// a reçu. Une autorité du réseau ouvert en ouvre d'autres, vers les candidats
 /// qu'elle sonde (voir <see cref="ServiceProbe"/>).
 ///
 /// Renvoyée chaque jour parce qu'une autorité oublie un service resté
@@ -31,12 +31,12 @@ public static class Announcer
     /// <remarks>
     /// Une autorité se présente à elle-même avant d'écouter, et un service
     /// démarre parfois avant son réseau : attendre l'intervalle entier le
-    /// tiendrait hors du cercle un jour de plus. Cinq minutes ne pèsent sur
+    /// tiendrait hors du réseau un jour de plus. Cinq minutes ne pèsent sur
     /// personne, l'annuaire n'étant de toute façon pas joint.
     /// </remarks>
     public static readonly TimeSpan Retry = TimeSpan.FromMinutes(5);
 
-    /// <summary>L'autorité du cercle ouvert, celle que le plugin connaît.</summary>
+    /// <summary>L'autorité du réseau ouvert, celle que le plugin connaît.</summary>
     public const string OfficialAuthority = "rdv.linkpearl.eorzea.events";
 
     /// <summary>
@@ -44,7 +44,7 @@ public static class Announcer
     /// </summary>
     /// <remarks>
     /// Par défaut, l'autorité officielle : un service qui tourne sert à tous, et
-    /// le cercle ouvert ne grandit que si l'on n'a rien à faire pour y entrer.
+    /// le réseau ouvert ne grandit que si l'on n'a rien à faire pour y entrer.
     /// Des annuaires donnés la remplacent, et le refus l'emporte sur tout.
     /// </remarks>
     public static IReadOnlyList<string> Targets(IReadOnlyList<string> given, bool optOut)

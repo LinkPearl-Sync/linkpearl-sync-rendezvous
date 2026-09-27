@@ -64,14 +64,14 @@ if (args.Contains("--help"))
 
         --announce-to      annuaire auprès duquel se porter candidat, au démarrage
                            puis chaque jour. Répétable. Par défaut, l'autorité du
-                           cercle ouvert (rdv.linkpearl.eorzea.events).
+                           réseau ouvert (rdv.linkpearl.eorzea.events).
         --no-announce      ne se porter candidat nulle part.
         --public-address   l'adresse sous laquelle les autres vous joignent. Par
                            défaut, l'annuaire retient l'adresse IPv4 d'où part la
                            candidature, avec le port de --port.
         --label            le nom qui s'affichera dans les annuaires.
 
-        --directory-authority  tient le rôle d'autorité du cercle ouvert : sonde
+        --directory-authority  tient le rôle d'autorité du réseau ouvert : sonde
                                les candidats, signe et sert la liste. Désactivé
                                par défaut.
         --directory-key        clé de signature de l'autorité (directory.key).
@@ -158,7 +158,7 @@ if (args.Contains("--directory-authority"))
     var key = DirectoryKey.LoadOrCreate(ArgString("--directory-key", "directory.key"));
     var ledger = AuthorityLedger.Load(ArgString("--authority-state", "authority.json"), clock);
     authority = new AuthorityService(ledger, new ServiceProbe(), key, clock);
-    Console.WriteLine($"Autorité du cercle ouvert, clé publique {Convert.ToHexStringLower(authority.PublicPoint)}.");
+    Console.WriteLine($"Autorité du réseau ouvert, clé publique {Convert.ToHexStringLower(authority.PublicPoint)}.");
 }
 
 var service = new RendezvousServer(port, directory, limits, clock, verbose: args.Contains("--verbose"))

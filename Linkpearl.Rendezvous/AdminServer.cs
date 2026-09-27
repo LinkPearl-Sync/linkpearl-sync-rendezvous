@@ -44,7 +44,7 @@ public sealed class AdminServer(
     /// <summary>Où la console écrit ce qu'elle change. Jamais d'adresse ni de nom.</summary>
     public TextWriter Log { get; init; } = Console.Out;
 
-    /// <summary>L'autorité du cercle ouvert, si ce service en tient le rôle.</summary>
+    /// <summary>L'autorité du réseau ouvert, si ce service en tient le rôle.</summary>
     public AuthorityService? Authority { get; init; }
 
     /// <summary>
@@ -402,7 +402,7 @@ public sealed class AdminServer(
                     // Réémise aussitôt : un service écarté ne doit pas rester
                     // servi jusqu'à la ronde suivante.
                     Authority!.IssueIfNeeded();
-                    Log.WriteLine(veto ? $"Service écarté du cercle ouvert : {address}." : $"Service rétabli : {address}.");
+                    Log.WriteLine(veto ? $"Service écarté du réseau ouvert : {address}." : $"Service rétabli : {address}.");
                 }
 
                 Respond(context, done ? 200 : 404, "application/json", Result(done, address));

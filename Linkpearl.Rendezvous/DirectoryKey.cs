@@ -4,7 +4,7 @@ using Linkpearl.Core.Transport.Rendezvous;
 namespace Linkpearl.Rendezvous;
 
 /// <summary>
-/// La clé qui signe la liste du cercle ouvert.
+/// La clé qui signe la liste du réseau ouvert.
 /// </summary>
 /// <remarks>
 /// Sa partie publique est inscrite dans le plugin : la perdre oblige à publier

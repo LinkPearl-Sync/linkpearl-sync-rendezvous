@@ -10,7 +10,7 @@ namespace Linkpearl.Rendezvous;
 /// et les sommes de ce qu'elle installe.
 /// </summary>
 /// <remarks>
-/// Signé en ECDSA P-256 au format P1363, comme la liste du cercle ouvert. La
+/// Signé en ECDSA P-256 au format P1363, comme la liste du réseau ouvert. La
 /// vérification est écrite ici plutôt qu'empruntée à ServiceConsensus : celle-ci
 /// est privée, dans Protocol/, copie littérale du plugin qu'on ne retouche pas.
 /// </remarks>

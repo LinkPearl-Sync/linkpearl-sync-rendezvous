@@ -13,8 +13,8 @@ et son `docs/reprise.md` avant toute décision qui touche au protocole.
    personnage, ni manifeste, ni fichier. Ne jamais introduire de chemin de code où le
    serveur fournit une clé, apprend une identité stable, ou conserve autre chose qu'un jeton
    opaque de dix minutes. Seule exception, le rôle d'autorité (`--directory-authority`) :
-   il fait foi sur le cercle ouvert et sur lui seul, en signant la liste des services
-   admis. Il ne voit toujours ni clé, ni nom, ni manifeste, et le cercle d'ancrage, où
+   il fait foi sur le réseau ouvert et sur lui seul, en signant la liste des services
+   admis. Il ne voit toujours ni clé, ni nom, ni manifeste, et le réseau d'ancrage, où
    passent les pairages, reste composé à la main.
 
 ## Style

@@ -17,7 +17,7 @@ Ce qu'il voit, et qui est irréductible sans relais systématique : les adresses
 noms de personnage sont en ligne, une adresse de boîte dérivant du nom. C'est dit ici plutôt
 que passé sous silence.
 
-Le rendez-vous **n'est une autorité qu'au pairage** (hors du rôle d'autorité du cercle ouvert,
+Le rendez-vous **n'est une autorité qu'au pairage** (hors du rôle d'autorité du réseau ouvert,
 plus bas, qui ne voit toujours ni clé ni nom). L'autorisation vient du carnet de pairs
 local de chaque joueur, mais la clé publique d'un pair y arrive par la boîte aux lettres du
 service, en clair : un opérateur malveillant peut s'intercaler au premier contact, sans que
@@ -257,12 +257,12 @@ de commande ou en authentification basique pour le navigateur.
 | `GET /api/worlds` | La table des mondes, id, nom, centre de données, région |
 | `GET /api/settings` | Les réglages en vigueur et leurs bornes |
 | `PUT /api/settings` | Change des réglages, à chaud et dans `settings.json` ; 400 hors bornes |
-| `POST /api/authority/veto` | Écarte un service du cercle ouvert ; 404 s'il n'est pas suivi |
+| `POST /api/authority/veto` | Écarte un service du réseau ouvert ; 404 s'il n'est pas suivi |
 | `DELETE /api/authority/veto` | Rétablit un service écarté, qui repart en candidat |
 
-## Le cercle ouvert
+## Le réseau ouvert
 
-Avec `--directory-authority`, le service tient en plus le rôle d'autorité du cercle ouvert.
+Avec `--directory-authority`, le service tient en plus le rôle d'autorité du réseau ouvert.
 Il est désactivé par défaut : un service autohébergé n'en a pas l'usage, et le plugin
 n'accepterait de toute façon que la liste signée par une clé qu'il connaît.
 

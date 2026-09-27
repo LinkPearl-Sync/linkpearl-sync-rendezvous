@@ -78,6 +78,6 @@ public sealed class ServiceProbe : IServiceProbe
         }
     }
 
-    /// <summary>Le même filtre que le client applique aux lieux du cercle ouvert.</summary>
+    /// <summary>Le même filtre que le client applique aux lieux du réseau ouvert.</summary>
     public static bool IsPublic(IPAddress address) => ServiceConsensus.IsPublicAddress(address);
 }

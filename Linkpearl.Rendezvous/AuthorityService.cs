@@ -17,9 +17,9 @@ public interface IConsensusSource
 /// Le rôle d'autorité : sonder, juger, signer.
 /// </summary>
 /// <remarks>
-/// Une autorité ne fait foi que sur le cercle ouvert, qui ne voit jamais passer
+/// Une autorité ne fait foi que sur le réseau ouvert, qui ne voit jamais passer
 /// une clé : le pire qu'elle puisse y admettre est un service qui refuse ou
-/// observe des métadonnées. Le cercle d'ancrage, où passent les pairages,
+/// observe des métadonnées. Le réseau d'ancrage, où passent les pairages,
 /// reste composé à la main par chaque utilisateur.
 /// </remarks>
 public sealed class AuthorityService(

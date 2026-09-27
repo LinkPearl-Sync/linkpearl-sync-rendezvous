@@ -279,7 +279,7 @@ public static class AdminPage
           <div id="autoriteSection" hidden>
             <h2>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/></svg>
-              Cercle ouvert <span class="compte" id="compteAutorite"></span>
+              Réseau ouvert <span class="compte" id="compteAutorite"></span>
             </h2>
             <div class="panneau">
               <p class="doux" style="margin:0 0 .5rem; overflow-wrap:anywhere" id="autoriteEtat"></p>
@@ -644,7 +644,7 @@ public static class AdminPage
               p.standing === "Vetoed"
                 ? bouton("rétablir", false, () => agir("/api/authority/veto", "DELETE", { address: p.address }, p.address + " rétabli"))
                 : bouton("écarter", true, () => {
-                    if (confirm("Écarter " + p.address + " du cercle ouvert ?"))
+                    if (confirm("Écarter " + p.address + " du réseau ouvert ?"))
                       return agir("/api/authority/veto", "POST", { address: p.address }, p.address + " écarté");
                   })
             ])), "aucun service suivi. Une candidature reçue par --announce-to apparaît ici après la prochaine sonde.");
