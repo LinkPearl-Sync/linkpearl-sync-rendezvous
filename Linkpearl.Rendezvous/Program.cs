@@ -78,6 +78,9 @@ if (args.Contains("--help"))
                                Engendrée au premier démarrage ; ne jamais
                                l'écraser ni la régénérer.
         --authority-state      registre des probations (authority.json).
+        --geoip                base GeoIP de l'autorité (geoip.mmdb). Téléchargée
+                               chaque mois depuis DB-IP (CC BY 4.0) ; se
+                               régénère, contrairement à directory.key.
 
         --admin-port  port de la console d'administration. 47901 par défaut.
         --admin-allow qui la console sert. « local » par défaut, et il vaut mieux
@@ -152,12 +155,17 @@ var bans = new BanStore(ArgString("--bans", "bans.json"));
 // service autohébergé n'en a pas l'usage, et le plugin n'accepterait de toute
 // façon que la liste signée par une clé qu'il connaît.
 AuthorityService? authority = null;
+GeoIpRegions? regions = null;
+GeoIpUpdater? geoip = null;
 
 if (args.Contains("--directory-authority"))
 {
     var key = DirectoryKey.LoadOrCreate(ArgString("--directory-key", "directory.key"));
     var ledger = AuthorityLedger.Load(ArgString("--authority-state", "authority.json"), clock);
-    authority = new AuthorityService(ledger, new ServiceProbe(), key, clock);
+    var geoipPath = ArgString("--geoip", "geoip.mmdb");
+    regions = new GeoIpRegions(geoipPath, clock);
+    geoip = new GeoIpUpdater(regions, geoipPath, new HttpClient { Timeout = TimeSpan.FromMinutes(5) }, clock);
+    authority = new AuthorityService(ledger, new ServiceProbe(), key, clock, regions);
     Console.WriteLine($"Autorité du réseau ouvert, clé publique {Convert.ToHexStringLower(authority.PublicPoint)}.");
 }
 
@@ -177,6 +185,9 @@ var running = new List<Task> { service.RunAsync(stopping.Token) };
 
 if (authority is not null)
     running.Add(authority.RunAsync(stopping.Token));
+
+if (geoip is not null)
+    running.Add(geoip.RunAsync(stopping.Token));
 
 if (args.Contains("--no-admin") is false)
 {

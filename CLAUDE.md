@@ -70,6 +70,8 @@ LPRDV_HOST=debian@rdv.linkpearl.eorzea.events LPRDV_KEY=~/.ssh/linkpearl_rdv ./d
 - `directory.key` et `authority.json` y vivent aussi, pour le rôle d'autorité.
   `directory.key` se garde comme `bans.json` : sa clé publique est inscrite dans le plugin,
   la perdre oblige à publier une version du plugin. Ne jamais l'écraser ni la régénérer.
+- `geoip.mmdb` y vit aussi, pour le rôle d'autorité. Contrairement à `bans.json`
+  et `directory.key`, il se régénère : le supprimer ne coûte qu'un téléchargement.
 - `~/.ssh/linkpearl_release.key` signe les releases pour la mise à jour automatique ; sa
   partie publique est dans `ReleaseKeys.cs`, sa copie dans le secret `LPRDV_RELEASE_KEY` de
   l'environnement GitHub `release`. Ne jamais l'écraser ni la régénérer : la perdre oblige

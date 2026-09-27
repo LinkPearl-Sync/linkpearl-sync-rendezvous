@@ -277,6 +277,11 @@ réponse. Au plus deux services par /24 ou /48, et cinq admissions par jour. La 
 signée par `directory.key` (`--directory-key`), valable sept jours, et resignée chaque
 jour même inchangée ; les probations vivent dans `authority.json` (`--authority-state`).
 
+L'autorité attribue à chaque service le continent de son adresse, d'après la
+base [IP to Country Lite](https://db-ip.com) de DB-IP, sous licence
+[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Elle la télécharge
+seule, une fois par mois, dans `geoip.mmdb`.
+
 La console montre la clé publique, la version émise, et chaque service suivi avec son
 état et son taux de réussite. « Écarter » retire un service tout de suite ; l'admission se
 passe de geste humain, le retrait non. « Admettre » lève la durée de probation d'un service

@@ -20,4 +20,8 @@
     <ProjectReference Include="..\Linkpearl.Rendezvous\Linkpearl.Rendezvous.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Include="Fixtures\GeoIP2-Country-Test.mmdb" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

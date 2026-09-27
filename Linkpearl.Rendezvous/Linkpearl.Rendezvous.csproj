@@ -12,6 +12,10 @@
     <InvariantGlobalization>true</InvariantGlobalization>
   </PropertyGroup>
 
+  <ItemGroup>
+    <PackageReference Include="MaxMind.Db" Version="5.2.0" />
+  </ItemGroup>
+
   <Import Project="..\build\Protocol.Sources.props" />
 
 </Project>
