@@ -78,6 +78,27 @@ public sealed record RendezvousLimits
     public TimeSpan RelayWaitTimeout { get; init; } = TimeSpan.FromSeconds(30);
 
     /// <summary>
+    /// Temps accordé à une session pour prendre une trame qu'on lui envoie.
+    /// </summary>
+    /// <remarks>
+    /// Une trame de rendez-vous pèse au plus 64 Kio, et un client vivant la
+    /// prend dans son tampon en quelques millisecondes : cinq secondes
+    /// laissent passer un lien mobile engorgé, et coupent celui qui a cessé
+    /// de lire avant qu'il ne retienne trop longtemps ceux qui lui écrivent.
+    /// </remarks>
+    public TimeSpan PeerSendTimeout { get; init; } = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// Temps au bout duquel un relais dont un côté ne prend plus rien est coupé.
+    /// </summary>
+    /// <remarks>
+    /// Trente secondes sans qu'un seul bloc de 16 Kio passe : aucun lien en
+    /// état de servir une apparence ne reste aussi longtemps à l'arrêt, et
+    /// le pair, de son côté, abandonne bien avant.
+    /// </remarks>
+    public TimeSpan RelayStallTimeout { get; init; } = TimeSpan.FromSeconds(30);
+
+    /// <summary>
     /// Keepalive TCP sur chaque socket acceptée.
     /// </summary>
     /// <remarks>

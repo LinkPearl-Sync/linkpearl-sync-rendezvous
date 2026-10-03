@@ -79,14 +79,36 @@ public sealed class ServerHarness : IAsyncDisposable
         return harness;
     }
 
-    public async Task<TestClient> ConnectAsync()
+    /// <param name="receiveBuffer">
+    /// Un tampon de réception réduit, pour qu'un client qui ne lit pas se
+    /// remplisse vite au lieu d'absorber des mégaoctets.
+    /// </param>
+    public async Task<TestClient> ConnectAsync(int? receiveBuffer = null)
     {
         var client = new TcpClient(AddressFamily.InterNetwork);
+
+        if (receiveBuffer is { } size)
+            client.ReceiveBufferSize = size;
+
         await client.ConnectAsync(IPAddress.Loopback, Port);
 
         var wrapped = new TestClient(client);
         _clients.Add(wrapped);
         return wrapped;
+    }
+
+    /// <summary>Attend qu'une condition sur le service devienne vraie, ou échoue.</summary>
+    public static async Task WaitUntilAsync(Func<bool> condition, TimeSpan? patience = null)
+    {
+        var deadline = DateTime.UtcNow + (patience ?? TimeSpan.FromSeconds(5));
+
+        while (condition() is false)
+        {
+            if (DateTime.UtcNow > deadline)
+                throw new TimeoutException("condition jamais remplie");
+
+            await Task.Delay(20);
+        }
     }
 
     public async ValueTask DisposeAsync()

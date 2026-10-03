@@ -1,0 +1,21 @@
+# Les actions sont épinglées par empreinte de commit : sans Dependabot, elles
+# ne bougeraient plus jamais, correctifs de sécurité compris. Il propose chaque
+# montée en pull request, qu'un humain relit avant de la fusionner : le
+# workflow de release tient la clé qui signe le binaire installé en root.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: chore(ci)
+
+  - package-ecosystem: nuget
+    directories:
+      - /Linkpearl.Rendezvous
+      - /Linkpearl.Rendezvous.Tests
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: chore(deps)

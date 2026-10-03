@@ -350,7 +350,8 @@ public sealed class RendezvousServer(
     /// </remarks>
     private void Admit(TcpClient client, CancellationToken ct)
     {
-        var session = new PeerSession(client);
+        var limits = Limits;
+        var session = new PeerSession(client) { SendTimeout = limits.PeerSendTimeout, RelayStallTimeout = limits.RelayStallTimeout };
 
         if (TryReserve(session.Bucket) is false)
         {
@@ -888,10 +889,12 @@ public sealed class RendezvousServer(
 
         var delivery = RendezvousWire.MailboxDelivery(frame.AsSpan(1 + RendezvousWire.MailboxAddressSize));
 
-        // À chacune des sessions qui tiennent la boîte, et l'échec de l'une
-        // ne prive ni les autres ni celui qui dépose.
-        foreach (var recipient in recipients)
-            await recipient.TrySendAsync(delivery, ct).ConfigureAwait(false);
+        // À chacune des sessions qui tiennent la boîte, en parallèle : l'échec
+        // ou la lenteur de l'une ne prive ni les autres ni celui qui dépose.
+        // Le nombre de détenteurs est borné, et chaque envoi a son délai, au
+        // bout duquel le destinataire est coupé : celui qui dépose attend au
+        // plus ce délai, une fois.
+        await Task.WhenAll(recipients.Select(recipient => recipient.TrySendAsync(delivery, ct))).ConfigureAwait(false);
 
         return true;
     }

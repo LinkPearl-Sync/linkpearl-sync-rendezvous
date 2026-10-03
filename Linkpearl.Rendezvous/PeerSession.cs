@@ -136,17 +136,104 @@ public sealed class PeerSession(TcpClient client) : IDisposable
         return await ReadExactlyAsync(body, ct).ConfigureAwait(false) ? body : null;
     }
 
-    public async Task SendAsync(byte[] body, CancellationToken ct)
+    /// <summary>
+    /// Temps accordé à un envoi vers cette session, attente du tour comprise.
+    /// </summary>
+    /// <remarks>
+    /// Un client qui cesse de lire sans fermer remplit son tampon, puis tout
+    /// envoi vers lui reste suspendu : le keepalive ne le voit pas, puisque
+    /// sa pile TCP acquitte toujours. Sans délai, chaque session qui lui
+    /// remettait un dépôt restait bloquée avec lui, et il gardait sa place
+    /// et ses boîtes pour toujours.
+    /// </remarks>
+    public TimeSpan SendTimeout { get; init; } = RendezvousLimits.Default.PeerSendTimeout;
+
+    /// <summary>
+    /// Temps accordé, dans un relais, à cette session pour prendre un bloc.
+    /// </summary>
+    /// <remarks>
+    /// Plus long que <see cref="SendTimeout"/> : un relais pousse des
+    /// mégaoctets, et un tampon plein y est la contre-pression normale d'un
+    /// lien plus lent que l'autre, pas un abandon. Ne rien prendre pendant
+    /// ce délai, en revanche, en est un.
+    /// </remarks>
+    public TimeSpan RelayStallTimeout { get; init; } = RendezvousLimits.Default.RelayStallTimeout;
+
+    public Task SendAsync(byte[] body, CancellationToken ct) => SendAsync(body, SendTimeout, ct);
+
+    /// <summary>
+    /// Envoie une trame, ou coupe la session si elle ne la prend pas à temps.
+    /// </summary>
+    /// <remarks>
+    /// Un destinataire trop lent est coupé, et non simplement sauté : un
+    /// envoi abandonné à mi-trame laisserait son flux désaligné, et le
+    /// garder ouvert ne ferait que reporter le blocage au dépôt suivant. La
+    /// coupure fait tomber sa propre boucle de service, qui rend sa place et
+    /// ses boîtes.
+    /// </remarks>
+    public async Task SendAsync(byte[] body, TimeSpan patience, CancellationToken ct)
     {
-        await _sending.WaitAsync(ct).ConfigureAwait(false);
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        deadline.CancelAfter(patience);
+
         try
         {
-            await _stream.WriteAsync(RendezvousWire.Frame(body), ct).ConfigureAwait(false);
+            await _sending.WaitAsync(deadline.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested is false)
+        {
+            throw TooSlow();
+        }
+
+        try
+        {
+            await _stream.WriteAsync(RendezvousWire.Frame(body), deadline.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested is false)
+        {
+            throw TooSlow();
         }
         finally
         {
             _sending.Release();
         }
+    }
+
+    private IOException TooSlow()
+    {
+        Interlocked.Increment(ref _slowCuts);
+        Abort();
+        return new IOException("destinataire trop lent, session coupée");
+    }
+
+    /// <summary>Sessions coupées pour n'avoir pas lu à temps, depuis le démarrage.</summary>
+    public static long SlowCuts => Interlocked.Read(ref _slowCuts);
+
+    private static long _slowCuts;
+
+    /// <summary>
+    /// Ferme la socket sans attendre, depuis n'importe quel fil.
+    /// </summary>
+    /// <remarks>
+    /// Une remise à zéro et non une fermeture polie : ce qui reste dans le
+    /// tampon d'un lecteur qui ne lit plus n'arrivera jamais, et le garder
+    /// occuperait la mémoire du noyau. La lecture en cours dans la boucle de
+    /// service lève alors, et c'est son <c>finally</c> qui libère tout. Une
+    /// session garée pour un relais est réveillée aussi, sans quoi sa boucle
+    /// attendrait un pontage qui ne viendra plus.
+    /// </remarks>
+    public void Abort()
+    {
+        try
+        {
+            client.Client.Close(0);
+        }
+        catch (Exception e) when (e is SocketException or ObjectDisposedException)
+        {
+            // Déjà fermée : c'est ce qu'on voulait.
+        }
+
+        _relayFinished.TrySetResult();
     }
 
     /// <summary>
@@ -236,7 +323,7 @@ public sealed class PeerSession(TcpClient client) : IDisposable
             if (frame[0] != RendezvousKind.RelayData)
                 return;
 
-            await to.SendAsync(frame, ct).ConfigureAwait(false);
+            await to.SendAsync(frame, to.RelayStallTimeout, ct).ConfigureAwait(false);
             Interlocked.Add(ref _relayedBytes, frame.Length);
         }
     }
@@ -268,7 +355,10 @@ public sealed class PeerSession(TcpClient client) : IDisposable
 
     public void Dispose()
     {
-        _sending.Dispose();
+        // Le sémaphore n'est pas libéré : une autre session peut être en
+        // train de nous envoyer une trame à cet instant, et son Release
+        // lèverait sur un objet détruit. Sans poignée d'attente demandée, il
+        // ne tient aucune ressource du système.
         _stream.Dispose();
         client.Dispose();
     }
