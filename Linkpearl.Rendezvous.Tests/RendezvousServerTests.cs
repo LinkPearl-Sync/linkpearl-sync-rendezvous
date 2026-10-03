@@ -478,9 +478,13 @@ public sealed class SharedKeyTests
         // donc à la même milliseconde. Chacun ne trouvait personne en attente,
         // chacun se garait, et le second écrasait le premier : « relais sans
         // partenaire » trente secondes plus tard. Vu avec le banc, deux fois
-        // sur deux.
+        // sur deux. Le plafond de relais par adresse est levé : les cinquante
+        // tours viennent de la même adresse, et un relais refermé côté client
+        // n'est pas forcément libéré par le service avant le tour suivant, ce
+        // qui faisait échouer le test sur un runner lent sans rapport avec la
+        // course qu'il éprouve.
         await using var harness = await ServerHarness.StartAsync(
-            RendezvousLimits.Default with { AnnouncementsPerMinute = 10_000 });
+            RendezvousLimits.Default with { AnnouncementsPerMinute = 10_000, MaxRelaysPerAddress = 10_000 });
 
         for (var round = 0; round < 50; round++)
         {

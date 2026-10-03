@@ -26,6 +26,7 @@ public sealed class AdminServerTests : IAsyncLifetime
     private RendezvousServer _service = null!;
     private string _token = null!;
     private string _root = null!;
+    private AdminServer _admin = null!;
     private Task _running = null!;
     private Task _serving = null!;
 
@@ -68,12 +69,13 @@ public sealed class AdminServerTests : IAsyncLifetime
             Log = TextWriter.Null,
         };
 
-        _running = new AdminServer(localOnly: true, port, servicePort, _token, _service, _directory, _bans, _settings, new ManualClock())
-            {
-                Log = _log,
-                Authority = _authority,
-            }
-            .RunAsync(_stopping.Token);
+        _admin = new AdminServer(localOnly: true, port, servicePort, _token, _service, _directory, _bans, _settings, new ManualClock())
+        {
+            Log = _log,
+            Authority = _authority,
+        };
+
+        _running = _admin.RunAsync(_stopping.Token);
     }
 
     private AuthorityService _authority = null!;
@@ -575,7 +577,13 @@ public sealed class AdminServerTests : IAsyncLifetime
         // localhost:port, ce que nginx fait de lui-même.
         var port = new Uri(_root).Port;
 
-        foreach (var host in new[] { $"localhost:{port}", $"127.0.0.1:{port}" })
+        // « localhost » n'est servi que si l'écoute a pu s'y lier : une machine
+        // sans IPv6, comme un runner de CI, se replie sur 127.0.0.1 seul.
+        string[] hosts = _admin.ServesLocalhostName
+            ? [$"localhost:{port}", $"127.0.0.1:{port}"]
+            : [$"127.0.0.1:{port}"];
+
+        foreach (var host in hosts)
         {
             var request = new HttpRequestMessage(HttpMethod.Get, $"{_root}/api/bans");
             request.Headers.Host = host;

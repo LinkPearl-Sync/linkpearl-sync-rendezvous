@@ -96,6 +96,16 @@ public sealed class AdminServer(
         }
     }
 
+    /// <summary>
+    /// Vrai si l'écoute répond aussi à l'hôte « localhost », et pas seulement à
+    /// « 127.0.0.1 ».
+    /// </summary>
+    /// <remarks>
+    /// Faux après le repli de <see cref="Listen"/> : un proxy inverse doit
+    /// alors transmettre « 127.0.0.1:port », seul hôte encore servi.
+    /// </remarks>
+    public bool ServesLocalhostName { get; private set; }
+
     /// <summary>Ouvre l'écoute : la boucle locale seule, ou toutes les interfaces.</summary>
     /// <remarks>
     /// « localhost » peut résoudre vers ::1 sur une machine dont l'IPv6 est
@@ -118,6 +128,7 @@ public sealed class AdminServer(
             try
             {
                 listener.Start();
+                ServesLocalhostName = attempts[i].Any(prefix => prefix.Contains("//localhost:", StringComparison.Ordinal));
                 return listener;
             }
             catch (HttpListenerException) when (i < attempts.Length - 1)
