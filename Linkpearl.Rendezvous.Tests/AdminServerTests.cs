@@ -577,18 +577,19 @@ public sealed class AdminServerTests : IAsyncLifetime
         // localhost:port, ce que nginx fait de lui-même.
         var port = new Uri(_root).Port;
 
-        // « localhost » n'est servi que si l'écoute a pu s'y lier : une machine
-        // sans IPv6, comme un runner de CI, se replie sur 127.0.0.1 seul.
-        string[] hosts = _admin.ServesLocalhostName
-            ? [$"localhost:{port}", $"127.0.0.1:{port}"]
-            : [$"127.0.0.1:{port}"];
+        // « localhost » n'est servi que si l'écoute a pu s'y lier. Il est joint
+        // par son nom, comme le ferait un proxy configuré ainsi : selon la
+        // machine, il résout vers ::1 ou 127.0.0.1, et l'écoute qui porte ce
+        // nom s'est liée à la même adresse. Lui imposer l'hôte « localhost »
+        // sur 127.0.0.1 échouait sur un runner où il résout vers ::1, sans
+        // qu'aucun proxy réel ne fasse ce mélange.
+        string[] roots = _admin.ServesLocalhostName
+            ? [_root, $"http://localhost:{port}"]
+            : [_root];
 
-        foreach (var host in hosts)
+        foreach (var root in roots)
         {
-            var request = new HttpRequestMessage(HttpMethod.Get, $"{_root}/api/bans");
-            request.Headers.Host = host;
-
-            var response = await _client.SendAsync(request);
+            var response = await _client.GetAsync($"{root}/api/bans");
 
             Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         }

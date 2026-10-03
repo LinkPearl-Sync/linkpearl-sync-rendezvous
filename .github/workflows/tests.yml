@@ -1,0 +1,41 @@
+name: Tests
+
+# Les mêmes vérifications que la publication, à chaque poussée sur main et à
+# chaque pull request. Sans elles, un test qui ne tombait que sur le runner
+# (sans IPv6, plus lent qu'un poste) n'était découvert qu'au tag, qui restait
+# alors sans release.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Récupérer le dépôt
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          persist-credentials: false
+
+      - name: Installer .NET
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9  # v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restaurer en mode verrouillé
+        run: dotnet restore Linkpearl.Rendezvous.Tests/Linkpearl.Rendezvous.Tests.csproj --locked-mode
+
+      - name: Vérifier
+        run: |
+          dotnet build Linkpearl.Rendezvous/Linkpearl.Rendezvous.csproj -c Release -warnaserror --no-restore --nologo
+          dotnet test Linkpearl.Rendezvous.Tests/Linkpearl.Rendezvous.Tests.csproj --no-restore --nologo
