@@ -9,13 +9,16 @@ et son `docs/reprise.md` avant toute décision qui touche au protocole.
    place : on corrige là-bas, puis on recopie, puis on vérifie que `diff` est vide des deux
    côtés. `Protocol/rendezvous-vectors.json` et `RendezvousVectorTests.cs` sont eux aussi
    identiques dans les deux dépôts, et ce sont eux qui attrapent une dérive.
-2. **Le rendez-vous n'est pas une autorité.** Il ne voit ni clé publique, ni nom de
-   personnage, ni manifeste, ni fichier. Ne jamais introduire de chemin de code où le
-   serveur fournit une clé, apprend une identité stable, ou conserve autre chose qu'un jeton
-   opaque de dix minutes. Seule exception, le rôle d'autorité (`--directory-authority`) :
-   il fait foi sur le réseau ouvert et sur lui seul, en signant la liste des services
-   admis. Il ne voit toujours ni clé, ni nom, ni manifeste, et le réseau d'ancrage, où
-   passent les pairages, reste composé à la main.
+2. **Le rendez-vous n'est pas une autorité.** Il ne voit ni manifeste ni fichier. Il voit
+   en revanche passer en clair, dans ses boîtes, les demandes de pairage et d'admission :
+   nom, monde et clé publique de qui demande. Il ne doit jamais les lire, les journaliser ni
+   les conserver, et ne jamais écrire nulle part qu'il ne les voit pas. Ne jamais introduire
+   de chemin de code où le serveur fournit ou remplace une clé, apprend une identité stable,
+   ou conserve autre chose qu'un jeton opaque de dix minutes. Il n'y a pas de TLS : tout ce
+   que le service voit en clair, un observateur du réseau le voit aussi. Seule exception à
+   la règle d'autorité, le rôle d'autorité (`--directory-authority`) : il fait foi sur le
+   réseau ouvert et sur lui seul, en signant la liste des services admis, et le réseau
+   d'ancrage, où passent les pairages, reste composé à la main.
 
 ## Style
 

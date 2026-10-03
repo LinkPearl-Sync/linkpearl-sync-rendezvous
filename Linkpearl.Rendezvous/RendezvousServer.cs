@@ -22,10 +22,13 @@ namespace Linkpearl.Rendezvous;
 /// </list>
 ///
 /// Ce qu'il apprend, à écrire tel quel dans le modèle de menace : des adresses
-/// IP, des jetons opaques qui tournent toutes les dix minutes, et le fait que
-/// deux adresses partagent un jeton dans une fenêtre. Ni clé publique, ni nom de
-/// personnage, ni manifeste, ni fichier. Un observateur ne peut pas relier deux
-/// fenêtres entre elles.
+/// IP, des jetons opaques qui tournent toutes les dix minutes, le fait que deux
+/// adresses partagent un jeton dans une fenêtre, et quels personnages sont en
+/// ligne, puisqu'une adresse de boîte dérive du nom. Les dépôts de boîte
+/// traversent le service en clair : une demande de pairage ou d'admission y
+/// porte le nom, le monde et la clé publique de qui demande. Il ne les lit pas
+/// et ne les garde pas, mais il le pourrait, et sans TLS un observateur du
+/// réseau aussi. Ni manifeste, ni fichier.
 ///
 /// Rien de ce qu'il fait n'est persisté : jetons, attentes et boîtes vivent
 /// en mémoire et disparaissent avec le processus. Ce que

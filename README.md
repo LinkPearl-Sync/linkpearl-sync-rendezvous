@@ -6,23 +6,53 @@ synchronisation pair à pair de l'apparence moddée dans Final Fantasy XIV.
 Il aide deux pairs à se trouver, et relaie des octets chiffrés quand la connexion directe
 échoue. **Il ne stocke ni ne redistribue le moindre fichier de mod.**
 
-## Ce qu'il ne voit pas
+## Ce qu'il voit, et ce qu'il ne voit pas
 
-Ni clé publique, ni nom de personnage, ni manifeste, ni fichier. Les pairs s'y annoncent
-sous un jeton opaque dérivé d'un secret que le serveur ne connaît pas, et qui change toutes
-les dix minutes. Un observateur ne peut pas relier deux fenêtres entre elles, donc pas
-reconstituer un graphe de relations ni des horaires de présence.
+**Il ne voit ni manifeste ni fichier.** Les sessions entre pairs sont chiffrées de bout en
+bout, relais compris : le service transporte des octets qu'il ne sait pas lire. Pour
+l'appariement, les pairs s'annoncent sous un jeton opaque dérivé d'un secret de paire qu'il
+ne connaît pas, et qui change toutes les dix minutes : deux fenêtres ne se relient pas par
+ce jeton.
 
-Ce qu'il voit, et qui est irréductible sans relais systématique : les adresses IP, et quels
-noms de personnage sont en ligne, une adresse de boîte dérivant du nom. C'est dit ici plutôt
-que passé sous silence.
+**Il voit, en revanche, des noms de personnage et des clés publiques.** Les demandes de
+pairage et d'admission dans un groupe, et leurs réponses, passent par les boîtes aux lettres
+du service, en clair : le nom, le monde et la clé publique de qui demande y sont lisibles, et
+pour une admission le code du groupe aussi. Le service ne les journalise ni ne les conserve,
+mais un opérateur qui modifierait son service pourrait les lire, les garder, et s'intercaler
+au premier contact. C'est la limite principale du protocole, assumée et décrite dans le
+modèle de confiance du plugin.
+
+**Il voit qui est en ligne, et n'importe qui peut le lui demander.** Une adresse de boîte
+personnelle dérive du nom de personnage, par une empreinte rapide : connaître `nom@monde`
+suffit à la calculer. Interroger la présence de cette boîte (`MailboxQuery`), ou y déposer
+une demande et lire la réponse « destinataire absent », dit à quiconque si ce personnage a
+le plugin ouvert en ce moment, sans être pairé avec lui. Le service ne peut pas l'empêcher
+sans casser la découverte ; il borne seulement le débit, par adresse, par /64 et par /48 en
+IPv6 (`--rate`). L'adresse tourne toutes les trente minutes, ce qui empêche de relier deux
+périodes par l'adresse seule, pas de réinterroger le même nom. Une boîte personnelle se
+réclame en exclusivité (`MailboxClaim`, 0x1D, réponse `MailboxClaimed` 0x1E) : un tiers qui
+connaît le nom ne peut plus l'ouvrir en même temps que son titulaire pour lire ce qui lui
+est adressé, mais il peut toujours tester sa présence.
+
+**Il voit les adresses IP**, et lesquelles s'apparient ou relaient ensemble dans une
+fenêtre : c'est irréductible sans relais systématique.
+
+**Il n'y a pas de TLS.** Le port du service parle un protocole binaire en clair sur TCP et
+UDP. Ce qui compte est chiffré par les pairs eux-mêmes, mais tout ce que le service voit en
+clair, un observateur du réseau entre le joueur et le service le voit aussi : noms, mondes
+et clés des demandes de pairage, adresses de boîtes interrogées, jetons d'appariement. Et un
+tel observateur peut modifier ces trames comme le pourrait un opérateur malveillant, donc
+s'intercaler au premier contact. La liste signée du réseau ouvert est protégée par sa
+signature, pas par le transport. La console, elle, est en HTTP clair et n'écoute qu'en
+local (voir plus bas).
 
 Le rendez-vous **n'est une autorité qu'au pairage** (hors du rôle d'autorité du réseau ouvert,
-plus bas, qui ne voit toujours ni clé ni nom). L'autorisation vient du carnet de pairs
-local de chaque joueur, mais la clé publique d'un pair y arrive par la boîte aux lettres du
-service, en clair : un opérateur malveillant peut s'intercaler au premier contact, sans que
-personne s'en aperçoive. Une fois la clé épinglée dans le carnet, il peut faire échouer une
-connexion, jamais usurper une identité. Le modèle de confiance complet est dans
+plus bas, qui ne voit pas plus de clés ni de noms que ce qui précède). L'autorisation vient
+du carnet de pairs local de chaque joueur, mais la clé publique d'un pair y arrive par la
+boîte aux lettres du service, en clair : un opérateur malveillant, ou quiconque sur le
+chemin réseau, peut s'intercaler au premier contact, sans que personne s'en aperçoive. Une
+fois la clé épinglée dans le carnet, il peut faire échouer une connexion, jamais usurper une
+identité. Le modèle de confiance complet est dans
 [`docs/protocol.md`](https://github.com/LinkPearl-Sync/linkpearl-sync-plugin/blob/main/docs/protocol.md)
 du plugin.
 
@@ -188,8 +218,9 @@ doit transmettre cet hôte et non le nom public : nginx le fait de lui-même ave
 `header_up Host {upstream_hostport}`. `::1` ne s'écrit pas dans un préfixe `HttpListener`,
 d'où `localhost`. Avec `--admin-allow any`, le port reste ouvert sur toutes les interfaces.
 
-Aucun nom de personnage n'apparaît nulle part sur cette page, et ce n'est pas une précaution
-d'affichage : le service n'en connaît aucun.
+Aucun nom de personnage n'apparaît nulle part sur cette page : le service ne garde ni ne
+journalise ceux qui traversent ses boîtes, et ne tient que des empreintes dans sa liste de
+bannissement.
 
 Le navigateur rejoue l'authentification basique sur toute requête vers la console, y compris
 celles qu'une page tierce lui ferait envoyer. Les mutations (`POST`, `PUT`, `DELETE`) sont

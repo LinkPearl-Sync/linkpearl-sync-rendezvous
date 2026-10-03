@@ -509,9 +509,10 @@ public sealed class AdminServer(
             });
         }
 
-        // Aucun nom de personnage ici, et ce n'est pas une précaution
-        // d'affichage : le service n'en connaît aucun, il ne voit que des
-        // adresses de boîte, qui sont des empreintes.
+        // Aucun nom de personnage ici. Le service en voit passer, en clair,
+        // dans les demandes de pairage qui traversent ses boîtes, mais il ne
+        // les lit ni ne les garde : il ne tient que des adresses de boîte,
+        // qui sont des empreintes.
         var document = new JsonObject
         {
             ["version"] = Version,

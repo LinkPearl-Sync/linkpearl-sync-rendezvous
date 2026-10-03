@@ -115,9 +115,11 @@ Une seule page, rafraîchie toutes les cinq secondes par un appel JSON.
 | Annuaire | Services connus, et candidatures en attente avec leur adresse et leur libellé |
 | Bannissements | Les entrées, avec leur motif et leur date |
 
-Aucun nom de personnage n'apparaît nulle part. Le service n'en connaît aucun :
-il ne voit que des adresses de boîte, qui sont des empreintes. C'est une
-propriété du système, pas une précaution d'affichage.
+Aucun nom de personnage n'apparaît nulle part. Le service n'en retient aucun :
+il ne tient que des adresses de boîte, qui sont des empreintes. Il en voit
+pourtant passer, en clair, dans les demandes de pairage et d'admission qui
+traversent ses boîtes (correction ultérieure : ce document affirmait d'abord
+qu'il n'en connaissait aucun, ce qui était faux).
 
 ### Points d'entrée
 
