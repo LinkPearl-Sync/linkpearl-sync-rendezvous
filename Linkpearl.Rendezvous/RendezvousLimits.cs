@@ -142,6 +142,44 @@ public sealed record RendezvousLimits
     public TimeSpan RelayStallTimeout { get; init; } = TimeSpan.FromSeconds(30);
 
     /// <summary>
+    /// Octets qu'un relais porte au plus, les deux sens ensemble.
+    /// </summary>
+    /// <remarks>
+    /// Une apparence moyenne pèse environ 800 Mo, et passe par le relais
+    /// quand le direct échoue. Deux pairs qui se découvrent échangent chacun
+    /// la sienne, soit 1,6 Go : 4 Gio laissent passer cet échange avec une
+    /// marge pour les apparences lourdes et les mises à jour de la soirée.
+    /// Au-delà, le relais se ferme et le pair en redemande un, ce qui reprend
+    /// où il en était : un fichier se transfère par blocs nommés par leur
+    /// empreinte. Sans quota, un tunnel servait de transport gratuit et sans
+    /// fin aux frais de l'opérateur.
+    /// </remarks>
+    public long RelayByteQuota { get; init; } = 4L * 1024 * 1024 * 1024;
+
+    /// <summary>
+    /// Durée de vie d'un relais.
+    /// </summary>
+    /// <remarks>
+    /// Deux heures : les 4 Gio du quota à 0,6 Mo/s, un débit qu'un relais
+    /// partagé tient même chargé, et une soirée de jeu entre deux mises à
+    /// jour. Le pair rouvre un relais au besoin ; un tunnel ouvert pour
+    /// toujours, lui, n'était plus un relais mais un service de transport.
+    /// </remarks>
+    public TimeSpan RelayMaxDuration { get; init; } = TimeSpan.FromHours(2);
+
+    /// <summary>
+    /// Relais tenus en même temps depuis une même adresse (un /64 en IPv6),
+    /// en attente ou pontés.
+    /// </summary>
+    /// <remarks>
+    /// Un joueur ne relaie qu'avec les pairs en ligne qu'il n'a pas joints
+    /// en direct : rarement plus d'une poignée, même derrière un NAT
+    /// symétrique. Seize couvrent deux clients derrière la même box avec de
+    /// la marge, sans qu'une adresse gare des centaines de sockets.
+    /// </remarks>
+    public int MaxRelaysPerAddress { get; init; } = 16;
+
+    /// <summary>
     /// Keepalive TCP sur chaque socket acceptée.
     /// </summary>
     /// <remarks>

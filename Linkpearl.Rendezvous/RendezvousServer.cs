@@ -485,6 +485,10 @@ public sealed class RendezvousServer(
         {
             Forget(session);
             _sessions.TryRemove(session, out _);
+
+            if (session.HoldsRelaySlot)
+                ReleaseRelay(session.Bucket);
+
             _slots.Release(session.Bucket, session.WideBucket);
             session.Dispose();
         }
@@ -724,6 +728,15 @@ public sealed class RendezvousServer(
             return false;
         }
 
+        if (TryReserveRelay(session) is false)
+        {
+            // Refusé sans couper, comme le relais coupé : la session a
+            // peut-être des boîtes ouvertes, et elle n'a commis aucune faute.
+            Interlocked.Increment(ref _refusedRelays);
+            await session.SendAsync(RendezvousWire.Error("trop de relais depuis cette adresse"), ct).ConfigureAwait(false);
+            return true;
+        }
+
         var key = Convert.ToHexStringLower(frame.AsSpan(1));
 
         // Une boucle, et on ne se gare que par TryAdd : les deux pairs passent
@@ -755,7 +768,14 @@ public sealed class RendezvousServer(
 
                     try
                     {
-                        await PeerSession.PipeAsync(partner.Session, session, ct).ConfigureAwait(false);
+                        var limits = Limits;
+
+                        if (await PeerSession.PipeAsync(partner.Session, session, limits.RelayByteQuota, limits.RelayMaxDuration, ct)
+                                .ConfigureAwait(false))
+                        {
+                            Interlocked.Increment(ref _relayQuotaCuts);
+                            Note("relais fermé, quota atteint", $"[{key[..8]}]");
+                        }
                     }
                     finally
                     {
@@ -1116,6 +1136,47 @@ public sealed class RendezvousServer(
                 _rate.TryRemove(new KeyValuePair<string, (int, DateTimeOffset)>(bucket, entry));
         }
     }
+
+    /// <summary>
+    /// Compte un relais pour l'adresse de cette session, ou refuse au-delà du plafond.
+    /// </summary>
+    /// <remarks>
+    /// Garé ou ponté, un relais compte : un relais qui attend tient déjà une
+    /// socket, et c'est en se garant par centaines qu'on l'exploiterait.
+    /// </remarks>
+    private bool TryReserveRelay(PeerSession session)
+    {
+        if (session.HoldsRelaySlot)
+            return true;
+
+        if (_relaysPerBucket.AddOrUpdate(session.Bucket, 1, (_, held) => held + 1) > Limits.MaxRelaysPerAddress)
+        {
+            ReleaseRelay(session.Bucket);
+            return false;
+        }
+
+        session.HoldsRelaySlot = true;
+        return true;
+    }
+
+    private void ReleaseRelay(string bucket)
+    {
+        while (_relaysPerBucket.TryGetValue(bucket, out var held))
+        {
+            if (held <= 1
+                ? _relaysPerBucket.TryRemove(new KeyValuePair<string, int>(bucket, held))
+                : _relaysPerBucket.TryUpdate(bucket, held - 1, held))
+                return;
+        }
+    }
+
+    /// <summary>Relais tenus, garés ou pontés, par seau d'adresse.</summary>
+    private readonly ConcurrentDictionary<string, int> _relaysPerBucket = new(StringComparer.Ordinal);
+
+    private long _relayQuotaCuts;
+
+    /// <summary>Relais fermés pour avoir épuisé leur volume ou leur durée.</summary>
+    public long RelayQuotaCuts => Interlocked.Read(ref _relayQuotaCuts);
 
     /// <summary>Prévient une session garée que son pair n'est pas venu, et la libère.</summary>
     private static async Task AbandonRelayAsync(PeerSession session)

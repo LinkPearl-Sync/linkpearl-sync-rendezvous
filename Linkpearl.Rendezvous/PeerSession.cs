@@ -82,6 +82,9 @@ public sealed class PeerSession(TcpClient client) : IDisposable
 
     public bool IsRelaying { get; private set; }
 
+    /// <summary>Vrai quand la session compte dans le plafond de relais de son adresse.</summary>
+    public bool HoldsRelaySlot { get; set; }
+
     /// <summary>
     /// Vrai quand la session attend un pair pour relayer.
     /// </summary>
@@ -269,28 +272,40 @@ public sealed class PeerSession(TcpClient client) : IDisposable
     }
 
     /// <summary>
-    /// Met deux sessions bout à bout jusqu'à ce que l'une se ferme.
+    /// Met deux sessions bout à bout jusqu'à ce que l'une se ferme, ou que le
+    /// relais ait épuisé son volume ou sa durée.
     /// </summary>
     /// <remarks>
     /// Les octets sont recopiés sans être inspectés : ils sont déjà chiffrés de
     /// bout en bout par le canal des pairs. Le serveur transporte sans pouvoir
     /// lire, et c'est ce qui permet au relais de ne pas trahir la promesse du
     /// projet.
+    ///
+    /// Le volume se compte sur les deux sens ensemble : c'est la bande
+    /// passante de l'opérateur qu'il protège, et elle se paie dans les deux.
+    /// Un relais épuisé se ferme sans un mot, comme une coupure : le pair
+    /// sait reprendre un transfert, et redemande un relais s'il le faut.
     /// </remarks>
-    public static async Task PipeAsync(PeerSession one, PeerSession other, CancellationToken ct)
+    /// <returns>Vrai si le relais a été fermé par un quota.</returns>
+    public static async Task<bool> PipeAsync(
+        PeerSession one, PeerSession other, long byteQuota, TimeSpan maxDuration, CancellationToken ct)
     {
         one.IsRelaying = true;
         other.IsRelaying = true;
 
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        linked.CancelAfter(maxDuration);
+
+        var budget = new RelayBudget(byteQuota);
 
         var directions = new[]
         {
-            Copy(one, other, linked.Token),
-            Copy(other, one, linked.Token),
+            Copy(one, other, budget, linked.Token),
+            Copy(other, one, budget, linked.Token),
         };
 
         await Task.WhenAny(directions).ConfigureAwait(false);
+        var expired = linked.IsCancellationRequested && ct.IsCancellationRequested is false;
         await linked.CancelAsync().ConfigureAwait(false);
 
         try
@@ -307,6 +322,19 @@ public sealed class PeerSession(TcpClient client) : IDisposable
             one.ReleaseFromRelay();
             other.ReleaseFromRelay();
         }
+
+        return expired || budget.Exhausted;
+    }
+
+    /// <summary>Les octets qu'un relais peut encore porter, partagés par ses deux sens.</summary>
+    private sealed class RelayBudget(long quota)
+    {
+        private long _used;
+
+        public bool Exhausted => Interlocked.Read(ref _used) > quota;
+
+        /// <summary>Compte un bloc, et dit s'il tient encore dans le quota.</summary>
+        public bool Spend(int bytes) => Interlocked.Add(ref _used, bytes) <= quota;
     }
 
     /// <summary>
@@ -321,7 +349,7 @@ public sealed class PeerSession(TcpClient client) : IDisposable
 
     private static long _relayedBytes;
 
-    private static async Task Copy(PeerSession from, PeerSession to, CancellationToken ct)
+    private static async Task Copy(PeerSession from, PeerSession to, RelayBudget budget, CancellationToken ct)
     {
         while (ct.IsCancellationRequested is false)
         {
@@ -331,6 +359,11 @@ public sealed class PeerSession(TcpClient client) : IDisposable
                 return;
 
             if (frame[0] != RendezvousKind.RelayData)
+                return;
+
+            // Le bloc qui dépasse n'est pas transmis : il ferait sinon passer
+            // le quota d'une trame entière à chaque relais.
+            if (budget.Spend(frame.Length) is false)
                 return;
 
             await to.SendAsync(frame, to.RelayStallTimeout, ct).ConfigureAwait(false);
