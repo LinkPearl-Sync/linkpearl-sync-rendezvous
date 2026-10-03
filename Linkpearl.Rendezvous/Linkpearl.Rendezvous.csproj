@@ -10,6 +10,10 @@
          l'écraser à la première release plus récente. -->
     <Version>0.0.0-dev</Version>
     <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- Déclaré pour que packages.lock.json porte aussi la cible linux-x64 :
+         sans elle, la publication autonome de la release ne pourrait pas
+         restaurer en mode verrouillé. -->
+    <RuntimeIdentifiers>linux-x64</RuntimeIdentifiers>
   </PropertyGroup>
 
   <ItemGroup>

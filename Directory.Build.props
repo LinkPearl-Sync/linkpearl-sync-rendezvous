@@ -9,6 +9,14 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
     <InvariantGlobalization>true</InvariantGlobalization>
+
+    <!-- Les paquets sont figés par empreinte dans packages.lock.json : la
+         release signe un binaire installé en root, et une dépendance qui
+         changerait sous le même numéro y entrerait sans relecture. En CI
+         (CI=true, posé par GitHub), un écart fait échouer la restauration
+         au lieu de réécrire le fichier. -->
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <RestoreLockedMode Condition="'$(CI)' == 'true'">true</RestoreLockedMode>
   </PropertyGroup>
 
 </Project>
