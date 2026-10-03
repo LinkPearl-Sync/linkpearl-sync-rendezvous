@@ -44,7 +44,9 @@ public static class ReleaseCommands
         if (ReleaseVersion.TryParse(version, out var parsed) is false)
             throw new InvalidOperationException($"version {version} : trois composants numériques, pas de pré-version");
 
-        var files = ReleaseManifest.Payload.ToDictionary(
+        // Toutes les unités publiées, et pas seulement ce que la mise à jour
+        // pose : install.sh vérifie les siennes contre ce manifeste signé.
+        var files = ReleaseManifest.SignedFiles.ToDictionary(
             name => name,
             name => Convert.ToHexStringLower(SHA256.HashData(File.ReadAllBytes(Path.Combine(directory, name)))));
 

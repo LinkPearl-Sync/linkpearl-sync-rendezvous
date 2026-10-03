@@ -48,6 +48,42 @@ public sealed class ReleaseManifestTests
         => Assert.False(ReleaseManifest.TryParse(Encoding.UTF8.GetBytes(json), out _, out _));
 
     [Fact]
+    public void Un_manifeste_d_avant_les_unites_de_mise_a_jour_se_lit_encore()
+    {
+        var json = """{"version":"0.6.0","signed":1,"urgent":false,"files":{"lprdv":"%a","lprdv.service":"%b"}}"""
+            .Replace("%a", new string('a', 64)).Replace("%b", new string('b', 64));
+
+        Assert.True(ReleaseManifest.TryParse(Encoding.UTF8.GetBytes(json), out var parsed, out _));
+        Assert.False(parsed!.Files.ContainsKey("lprdv-update.service"));
+    }
+
+    [Fact]
+    public void Les_unites_de_mise_a_jour_font_l_aller_retour()
+    {
+        var manifest = Sample() with
+        {
+            Files = new Dictionary<string, string>
+            {
+                ["lprdv"] = new string('a', 64), ["lprdv.service"] = new string('b', 64),
+                ["lprdv-update.service"] = new string('c', 64), ["lprdv-update.timer"] = new string('d', 64),
+            },
+        };
+
+        Assert.True(ReleaseManifest.TryParse(manifest.ToBytes(), out var parsed, out _));
+        Assert.Equal(new string('c', 64), parsed!.Files["lprdv-update.service"]);
+        Assert.Equal(new string('d', 64), parsed.Files["lprdv-update.timer"]);
+    }
+
+    [Fact]
+    public void Une_somme_d_unite_malformee_est_refusee()
+    {
+        var json = """{"version":"0.6.0","signed":1,"urgent":false,"files":{"lprdv":"%a","lprdv.service":"%b","lprdv-update.timer":"court"}}"""
+            .Replace("%a", new string('a', 64)).Replace("%b", new string('b', 64));
+
+        Assert.False(ReleaseManifest.TryParse(Encoding.UTF8.GetBytes(json), out _, out _));
+    }
+
+    [Fact]
     public void Seule_une_cle_inscrite_verifie_la_signature()
     {
         using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);

@@ -113,10 +113,16 @@ public sealed class UpdaterTests : IDisposable
     }
 
     [Fact]
-    public async Task Une_release_urgente_n_attend_pas()
+    public async Task Une_release_urgente_n_attend_qu_une_heure()
     {
+        // L'urgence vient du workflow : un plancher qui vit dans le binaire
+        // installé laisse au mainteneur le temps de retirer une release
+        // urgente qu'il n'a pas voulue.
         Publish("0.6.0", TimeSpan.FromMinutes(5), urgent: true);
+        Assert.Equal(UpdateOutcome.Waiting, await Updater().RunAsync(CancellationToken.None));
+        Assert.Null(_installation.Staged);
 
+        Publish("0.6.0", Linkpearl.Rendezvous.Updater.UrgentGuard + TimeSpan.FromMinutes(1), urgent: true);
         Assert.Equal(UpdateOutcome.Installed, await Updater().RunAsync(CancellationToken.None));
     }
 

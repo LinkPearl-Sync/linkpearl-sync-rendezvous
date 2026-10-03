@@ -20,8 +20,23 @@ public sealed record ReleaseManifest(Version Version, long Signed, bool Urgent, 
 
     public const string SignatureName = "lprdv.release.json.sig";
 
-    /// <summary>Ce que la mise à jour pose : le binaire et son unité.</summary>
+    /// <summary>Ce que la mise à jour pose : le binaire et son unité. Exigé dans tout manifeste.</summary>
     public static readonly string[] Payload = ["lprdv", "lprdv.service"];
+
+    /// <summary>
+    /// Les unités de la mise à jour automatique, que pose install.sh.
+    /// </summary>
+    /// <remarks>
+    /// Elles tournent en root, et seul lprdv.sha256, non signé, les couvrait :
+    /// qui remplaçait les fichiers d'une release faisait exécuter ce qu'il
+    /// voulait à chaque serveur installé ensuite. Signées désormais avec le
+    /// reste, et facultatives à la lecture : un manifeste d'avant ne les
+    /// porte pas, et doit rester lisible.
+    /// </remarks>
+    public static readonly string[] UpdateUnits = ["lprdv-update.service", "lprdv-update.timer"];
+
+    /// <summary>Tout ce que la release signe : la charge utile et les unités de mise à jour.</summary>
+    public static IEnumerable<string> SignedFiles => Payload.Concat(UpdateUnits);
 
     public byte[] ToBytes()
     {
@@ -70,6 +85,23 @@ public sealed record ReleaseManifest(Version Version, long Signed, bool Urgent, 
                 }
 
                 sums[name] = sum.ToLowerInvariant();
+            }
+
+            foreach (var name in UpdateUnits)
+            {
+                switch (files[name])
+                {
+                    case null:
+                        continue;
+
+                    case JsonValue value when value.TryGetValue<string>(out var sum) && sum.Length is 64:
+                        sums[name] = sum.ToLowerInvariant();
+                        break;
+
+                    default:
+                        rejection = $"somme de {name} malformée";
+                        return false;
+                }
             }
 
             manifest = new ReleaseManifest(version, signed.GetValue<long>(), urgent.GetValue<bool>(), sums);

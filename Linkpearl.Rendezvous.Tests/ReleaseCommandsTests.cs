@@ -15,6 +15,8 @@ public sealed class ReleaseCommandsTests : IDisposable
         Directory.CreateDirectory(_dir);
         File.WriteAllBytes(Path.Combine(_dir, "lprdv"), [1, 2, 3]);
         File.WriteAllBytes(Path.Combine(_dir, "lprdv.service"), [4, 5]);
+        File.WriteAllBytes(Path.Combine(_dir, "lprdv-update.service"), [6]);
+        File.WriteAllBytes(Path.Combine(_dir, "lprdv-update.timer"), [7]);
     }
 
     public void Dispose()
@@ -36,6 +38,10 @@ public sealed class ReleaseCommandsTests : IDisposable
         Assert.True(parsed!.Urgent);
         Assert.Equal(clock.UtcNow.ToUnixTimeSeconds(), parsed.Signed);
         Assert.Equal(Convert.ToHexStringLower(SHA256.HashData(new byte[] { 1, 2, 3 })), parsed.Files["lprdv"]);
+
+        // Les unités de mise à jour, qui tournent en root, sont signées aussi.
+        Assert.Equal(Convert.ToHexStringLower(SHA256.HashData(new byte[] { 6 })), parsed.Files["lprdv-update.service"]);
+        Assert.Equal(Convert.ToHexStringLower(SHA256.HashData(new byte[] { 7 })), parsed.Files["lprdv-update.timer"]);
     }
 
     [Fact]

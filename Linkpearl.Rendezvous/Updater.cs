@@ -44,6 +44,21 @@ public sealed class Updater(
     /// </summary>
     public static readonly TimeSpan Guard = TimeSpan.FromHours(24);
 
+    /// <summary>
+    /// Le délai qu'une release urgente attend malgré tout.
+    /// </summary>
+    /// <remarks>
+    /// L'urgence est accordée par le workflow de release, qui tient la clé de
+    /// signature : sans plancher, quiconque le détournait, ou poussait un tag
+    /// urgent, faisait installer son binaire partout dans l'heure qui suit,
+    /// sans que personne ait le temps de le voir. Une heure suffit au
+    /// mainteneur, prévenu par la notification de release, pour la retirer,
+    /// et ne retarde guère un correctif qui en attendait vingt-quatre.
+    /// Ce plancher vit ici, dans le binaire déjà installé, hors de portée
+    /// du workflow.
+    /// </remarks>
+    public static readonly TimeSpan UrgentGuard = TimeSpan.FromHours(1);
+
     private string RefusedPath => Path.Combine(stateDir, "refused");
 
     /// <summary>
@@ -104,11 +119,20 @@ public sealed class Updater(
 
         var age = clock.UtcNow - DateTimeOffset.FromUnixTimeSeconds(manifest.Signed);
 
-        if (age < Guard && manifest.Urgent is false)
+        var guard = manifest.Urgent ? UrgentGuard : Guard;
+
+        if (age < guard)
         {
-            log.WriteLine($"Version {version} signée il y a {age.TotalHours:0} h : installée après {Guard.TotalHours:0} h.");
+            log.WriteLine(manifest.Urgent
+                ? $"Version {version} urgente, signée il y a {age.TotalMinutes:0} min : installée après {UrgentGuard.TotalMinutes:0} min."
+                : $"Version {version} signée il y a {age.TotalHours:0} h : installée après {Guard.TotalHours:0} h.");
             return UpdateOutcome.Waiting;
         }
+
+        // Dit à part dans le journal : une release qui a levé la garde de
+        // vingt-quatre heures est celle qu'un opérateur doit pouvoir retrouver.
+        if (manifest.Urgent && age < Guard)
+            log.WriteLine($"Version {version} marquée urgente : délai de garde réduit à {UrgentGuard.TotalHours:0} h.");
 
         byte[] binary, unit;
 
