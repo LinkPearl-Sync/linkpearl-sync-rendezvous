@@ -522,8 +522,22 @@ public sealed class RendezvousServer(
         if (RendezvousWire.TryReadDirectory(frame, out var submitted, out _) && submitted.Count is 1)
         {
             var entry = Announcer.Resolve(submitted[0], session.Remote);
-            directory.Submit(session.Bucket, entry);
-            Candidacy?.Invoke(entry, session.Bucket);
+
+            // L'autorité ne voit que ce que l'annuaire a laissé passer : une
+            // candidature freinée ou malformée ne l'atteignait pas moins, et
+            // le frein d'une candidature par heure ne protégeait que
+            // pending.txt. Une candidature déjà connue passe, elle : c'est
+            // ainsi qu'un service suivi renomme son libellé.
+            switch (directory.Consider(session.Bucket, entry))
+            {
+                case PeerDirectory.SubmitOutcome.Queued or PeerDirectory.SubmitOutcome.Known:
+                    Candidacy?.Invoke(entry, session.Bucket);
+                    break;
+
+                default:
+                    Interlocked.Increment(ref _refusedSubmissions);
+                    break;
+            }
         }
 
         return true;

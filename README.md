@@ -276,7 +276,13 @@ n'entre que s'il répond depuis cette adresse (ou ce /64), pour que personne n'i
 service d'un autre. `peers.txt` reste l'annuaire manuel et n'est pas sondé. Un candidat entre dans la liste
 après 72 heures à au moins 95 % de sondes réussies, en sort après 24 heures de silence,
 reprend sa place s'il revient dans les 72 heures, et est oublié après 7 jours sans
-réponse. Au plus deux services par /24 ou /48, et cinq admissions par jour. La liste est
+réponse ; un candidat qui n'a jamais répondu est oublié au bout d'une heure. Au plus deux
+services listés par /24 ou /48, quatre suivis par /24 ou /48 de l'adresse qui les a
+proposés, et cinq admissions par jour. Une candidature compte dans le limiteur, et
+n'atteint l'autorité que si l'annuaire l'a laissée passer (une par adresse et par heure). Un
+libellé qui porte un caractère de contrôle, de mise en forme (inversion bidirectionnelle
+comprise) ou un retour à la ligne est refusé avant d'être écrit nulle part, et un service
+listé qui change de libellé repasse en probation. La liste est
 signée par `directory.key` (`--directory-key`), valable sept jours, et resignée chaque
 jour même inchangée ; les probations vivent dans `authority.json` (`--authority-state`).
 

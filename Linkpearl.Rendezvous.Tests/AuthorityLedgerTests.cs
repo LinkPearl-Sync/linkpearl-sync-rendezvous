@@ -132,10 +132,13 @@ public sealed class AuthorityLedgerTests : IDisposable
         var ledger = AuthorityLedger.Load(StatePath, _clock);
         Assert.True(ledger.Track(new DirectoryEntry("rdv.a.ch", ""), "192.0.2.50"));
 
-        Run(ledger, TimeSpan.FromHours(80), Up, "rdv.a.ch");
-
-        Assert.Empty(ledger.Listed());
+        Run(ledger, TimeSpan.FromMinutes(50), Up, "rdv.a.ch");
         Assert.Equal(ServiceStanding.Candidate, StandingOf(ledger, "rdv.a.ch:47900"));
+
+        // Jamais joint depuis l'adresse qui l'a proposé : il est oublié.
+        Run(ledger, TimeSpan.FromHours(80), Up, "rdv.a.ch");
+        Assert.Empty(ledger.Listed());
+        Assert.Empty(ledger.Snapshot());
     }
 
     [Fact]
@@ -199,11 +202,73 @@ public sealed class AuthorityLedgerTests : IDisposable
     {
         var ledger = Ledger("rdv.a.ch");
 
-        Run(ledger, TimeSpan.FromDays(7), Down, "rdv.a.ch");
+        // Joint une fois : il a montré qu'un service vit à cette adresse.
+        Run(ledger, Round, Up, "rdv.a.ch");
+        Run(ledger, TimeSpan.FromDays(7) - Round, Down, "rdv.a.ch");
         Assert.Single(ledger.Snapshot());
 
         Run(ledger, Round, Down, "rdv.a.ch");
         Assert.Empty(ledger.Snapshot());
+    }
+
+    [Fact]
+    public void Un_candidat_jamais_joint_est_oublie_en_une_heure()
+    {
+        // Sept jours de grâce pour une adresse morte laissaient n'importe qui
+        // remplir le registre au rythme d'une candidature par heure.
+        var ledger = Ledger("rdv.a.ch");
+
+        Run(ledger, TimeSpan.FromMinutes(50), Down, "rdv.a.ch");
+        Assert.Single(ledger.Snapshot());
+
+        Run(ledger, TimeSpan.FromMinutes(20), Down, "rdv.a.ch");
+        Assert.Empty(ledger.Snapshot());
+    }
+
+    [Fact]
+    public void Un_reseau_ne_fait_pas_suivre_plus_de_quatre_services()
+    {
+        var ledger = AuthorityLedger.Load(StatePath, _clock);
+
+        for (var i = 1; i <= AuthorityLedger.MaxTrackedPerNetwork; i++)
+            Assert.True(ledger.Track(new DirectoryEntry($"rdv.s{i}.ch", ""), $"203.0.113.{i}"));
+
+        Assert.False(ledger.Track(new DirectoryEntry("rdv.s9.ch", ""), "203.0.113.9"));
+        Assert.True(ledger.Track(new DirectoryEntry("rdv.s9.ch", ""), "203.0.114.9"));
+
+        // En IPv6, le /48 : deux /64 différents d'un même /48 comptent ensemble.
+        for (var i = 1; i <= AuthorityLedger.MaxTrackedPerNetwork; i++)
+            Assert.True(ledger.Track(new DirectoryEntry($"rdv.v{i}.ch", ""), $"2001:db8:5:{i:x}::/64"));
+
+        Assert.False(ledger.Track(new DirectoryEntry("rdv.v9.ch", ""), "2001:db8:5:ff::/64"));
+        Assert.True(ledger.Track(new DirectoryEntry("rdv.v9.ch", ""), "2001:db8:6:ff::/64"));
+    }
+
+    [Fact]
+    public void Un_libelle_qui_porte_un_controle_ou_une_inversion_est_refuse()
+    {
+        var ledger = AuthorityLedger.Load(StatePath, _clock);
+
+        Assert.False(ledger.Track(new DirectoryEntry("rdv.a.ch", "Deux\nlignes"), "198.51.100.1"));
+        Assert.False(ledger.Track(new DirectoryEntry("rdv.a.ch", "abc\u202Edcba"), "198.51.100.1"));
+        Assert.Empty(ledger.Snapshot());
+
+        Assert.True(ledger.Track(new DirectoryEntry("rdv.a.ch", "Éorzéa, chez nous"), "198.51.100.1"));
+        Assert.False(ledger.Track(new DirectoryEntry("rdv.a.ch", "Faux\u200Fnom"), "198.51.100.1"));
+        Assert.Equal("Éorzéa, chez nous", ledger.Snapshot().Single().Label);
+    }
+
+    [Fact]
+    public void Un_service_liste_qui_change_de_nom_repasse_en_probation()
+    {
+        var ledger = Ledger("rdv.a.ch");
+        Run(ledger, TimeSpan.FromHours(73), Up, "rdv.a.ch");
+        Assert.Equal(ServiceStanding.Listed, StandingOf(ledger, "rdv.a.ch:47900"));
+
+        ledger.Track(new DirectoryEntry("rdv.a.ch", "Autre nom"), AddressBucket.Of(Where("rdv.a.ch")));
+
+        Assert.Equal(ServiceStanding.Probation, StandingOf(ledger, "rdv.a.ch:47900"));
+        Assert.Empty(ledger.Listed());
     }
 
     [Fact]

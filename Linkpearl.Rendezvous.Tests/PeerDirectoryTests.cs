@@ -117,6 +117,36 @@ public sealed class DirectoryTests : IDisposable
         Assert.Empty(directory.Pending());
     }
 
+    [Theory]
+    [InlineData("Deux\nlignes")]
+    [InlineData("rdv.faux.ch  Faux\r")]
+    [InlineData("abc\u202Edcba")]
+    [InlineData("nul\u0000")]
+    [InlineData("sep\u2028aration")]
+    public void Un_libelle_qui_porte_un_controle_ou_une_mise_en_forme_est_ecarte(string label)
+    {
+        // Un retour à la ligne écrivait une seconde candidature dans
+        // pending.txt, et une inversion bidirectionnelle faisait lire un
+        // autre nom que celui qui est stocké.
+        var directory = New();
+
+        Assert.Equal(PeerDirectory.SubmitOutcome.Invalid, directory.Consider("198.51.100.7", new DirectoryEntry("rdv.a.ch", label)));
+        Assert.Empty(directory.Pending());
+        Assert.False(File.Exists(PendingPath));
+    }
+
+    [Fact]
+    public void Une_candidature_deja_connue_compte_dans_le_frein()
+    {
+        // Sans cela, rejouer la candidature d'un service existant ne coûtait
+        // rien, et chaque répétition atteignait l'autorité.
+        var directory = New();
+        File.WriteAllText(PeersPath, "rdv.connu.ch  Connu\n");
+
+        Assert.Equal(PeerDirectory.SubmitOutcome.Known, directory.Consider("198.51.100.7", new DirectoryEntry("rdv.connu.ch", "Connu")));
+        Assert.Equal(PeerDirectory.SubmitOutcome.Throttled, directory.Consider("198.51.100.7", new DirectoryEntry("rdv.connu.ch", "Connu")));
+    }
+
     [Fact]
     public void La_file_survit_a_un_redemarrage()
     {

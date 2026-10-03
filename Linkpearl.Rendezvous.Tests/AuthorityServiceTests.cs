@@ -109,6 +109,38 @@ public sealed class AuthorityServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task Une_candidature_freinee_ou_malformee_n_atteint_pas_l_autorite()
+    {
+        // L'autorité recevait toutes les candidatures, même celles que
+        // l'annuaire écartait : le frein d'une par heure ne la protégeait pas.
+        var received = new List<DirectoryEntry>();
+        await using var harness = await ServerHarness.StartAsync(
+            candidacy: (entry, _) => { lock (received) received.Add(entry); });
+        using var client = await harness.ConnectAsync();
+
+        await client.SendAsync(RendezvousWire.DirectorySubmit("rdv.libelle.ch", "Deux\nlignes"));
+        await client.SendAsync(RendezvousWire.DirectorySubmit("rdv.premier.ch", "Premier"));
+        await client.SendAsync(RendezvousWire.DirectorySubmit("rdv.second.ch", "Second"));
+
+        await ServerHarness.WaitUntilAsync(() => harness.Server.Snapshot().Refusals.Directory is 2);
+
+        lock (received)
+            Assert.Equal("rdv.premier.ch", Assert.Single(received).Address);
+    }
+
+    [Fact]
+    public async Task Les_candidatures_comptent_dans_le_limiteur()
+    {
+        await using var harness = await ServerHarness.StartAsync(new RendezvousLimits { AnnouncementsPerMinute = 2 });
+        using var client = await harness.ConnectAsync();
+
+        for (var i = 0; i < 5; i++)
+            await client.SendAsync(RendezvousWire.DirectorySubmit($"rdv.c{i}.ch", ""));
+
+        await ServerHarness.WaitUntilAsync(() => harness.Server.Snapshot().RateRefusals is 3);
+    }
+
+    [Fact]
     public async Task Une_candidature_sans_adresse_publique_prend_celle_de_l_envoi()
     {
         var received = new TaskCompletionSource<DirectoryEntry>();

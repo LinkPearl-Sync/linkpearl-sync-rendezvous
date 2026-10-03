@@ -52,6 +52,30 @@ public sealed class AuthorityLedger
     /// <summary>Plafond de services suivis, pour qu'une vague de candidatures ne remplisse pas le disque.</summary>
     public const int MaxTracked = 1024;
 
+    /// <summary>
+    /// Services suivis au plus par /24 ou /48 de l'adresse qui les a proposés.
+    /// </summary>
+    /// <remarks>
+    /// Le plafond global seul se remplissait depuis un seul réseau, une
+    /// candidature par adresse et par heure, et fermait la porte à tous les
+    /// autres. Quatre, c'est deux de plus que ce qu'un réseau peut faire
+    /// lister : de quoi remplacer un service sans attendre que l'ancien soit
+    /// oublié.
+    /// </remarks>
+    public const int MaxTrackedPerNetwork = 4;
+
+    /// <summary>
+    /// Délai au bout duquel un candidat jamais joint est oublié.
+    /// </summary>
+    /// <remarks>
+    /// Une ronde de sondes passe toutes les dix minutes : six rondes sans une
+    /// réponse disent que l'adresse ne mène à aucun service. Le garder sept
+    /// jours, comme un service qui a répondu un jour, laissait n'importe qui
+    /// remplir le registre d'adresses mortes. Un vrai service qui démarrait
+    /// mal se représente de lui-même le lendemain.
+    /// </remarks>
+    public static readonly TimeSpan ForgetUnreachedAfter = TimeSpan.FromHours(1);
+
     private static readonly TimeSpan Day = TimeSpan.FromDays(1);
 
     /// <summary>Sondes gardées pour la disponibilité publiée : vingt-quatre heures à une toutes les dix minutes.</summary>
@@ -89,7 +113,7 @@ public sealed class AuthorityLedger
     /// </remarks>
     public bool Track(DirectoryEntry entry, string submitter)
     {
-        if (KeyOf(entry.Address) is not { } key)
+        if (KeyOf(entry.Address) is not { } key || ServiceLabel.IsAcceptable(entry.Label) is false)
             return false;
 
         lock (_gate)
@@ -99,6 +123,18 @@ public sealed class AuthorityLedger
                 if (known.Submitter == submitter && known.Label != entry.Label)
                 {
                     known.Label = entry.Label;
+
+                    // Un service listé qui change de nom repasse en
+                    // probation : la liste signée affiche ce nom à chaque
+                    // joueur, et l'admission a jugé un service sous l'ancien.
+                    // Sans cela, un service se faisait admettre sous un nom
+                    // anodin puis prenait celui d'un autre.
+                    if (known.ListedAt is not null && known.Vetoed is false)
+                    {
+                        known.ListedAt = null;
+                        StartProbation(known, _clock.UtcNow);
+                    }
+
                     SaveLocked();
                 }
 
@@ -106,6 +142,11 @@ public sealed class AuthorityLedger
             }
 
             if (_services.Count >= MaxTracked)
+                return false;
+
+            if (NetworkOf(submitter) is { } network
+                && _services.Values.Count(service => NetworkOf(service.Submitter) is { } other
+                    && other.AsSpan().SequenceEqual(network)) >= MaxTrackedPerNetwork)
                 return false;
 
             _services[key] = new Service { Address = key, Label = entry.Label, Submitter = submitter, FirstSeen = _clock.UtcNow };
@@ -188,7 +229,8 @@ public sealed class AuthorityLedger
 
             foreach (var forgotten in _services.Values
                          .Where(service => service.Vetoed is false && service.ListedAt is null
-                             && now - (service.LastSuccess ?? service.FirstSeen) >= ForgetAfter)
+                             && now - (service.LastSuccess ?? service.FirstSeen)
+                                 >= (service.LastSuccess is null ? ForgetUnreachedAfter : ForgetAfter))
                          .Select(service => service.Address).ToList())
                 _services.Remove(forgotten);
 
@@ -370,6 +412,22 @@ public sealed class AuthorityLedger
     private int FamilyCount(byte[]? family)
         => family is null ? 0 : _services.Values.Count(
             service => service.ListedAt is not null && service.Family is { } other && other.AsSpan().SequenceEqual(family));
+
+    /// <summary>
+    /// Le /24 ou le /48 d'une adresse de candidature, sous la forme d'une famille.
+    /// </summary>
+    /// <remarks>
+    /// Le soumetteur est un seau d'adresse : une IPv4, ou un /64 écrit
+    /// « préfixe/64 ». Un registre écrit à la main qui y mettrait autre chose
+    /// n'est compté dans aucun réseau, plutôt que de faire lever la candidature.
+    /// </remarks>
+    private static byte[]? NetworkOf(string submitter)
+    {
+        var slash = submitter.IndexOf('/');
+        var literal = slash < 0 ? submitter : submitter[..slash];
+
+        return IPAddress.TryParse(literal, out var address) ? ServiceConsensus.Family(address) : null;
+    }
 
     private static string? KeyOf(string address)
         => RendezvousAddress.TryParse(address, out var parsed, out _) ? ServiceConsensus.Canonical(parsed) : null;

@@ -62,11 +62,37 @@ public sealed class PeerDirectory(string peersPath, string pendingPath, IClock? 
 
     public IReadOnlyList<DirectoryEntry> Pending() => Read(pendingPath);
 
-    /// <summary>Enregistre une candidature. Rend faux quand elle est écartée.</summary>
-    public bool Submit(string sourceAddress, DirectoryEntry entry)
+    /// <summary>Ce qu'il est advenu d'une candidature.</summary>
+    public enum SubmitOutcome
     {
-        if (RendezvousAddress.TryParse(entry.Address, out _, out _) is false)
-            return false;
+        /// <summary>Nouvelle, et mise dans la file.</summary>
+        Queued,
+
+        /// <summary>Déjà connue ou déjà dans la file : rien n'est écrit, mais la source a parlé.</summary>
+        Known,
+
+        /// <summary>La source a déjà soumis dans l'heure.</summary>
+        Throttled,
+
+        /// <summary>Adresse illisible, ou libellé qui porte ce qu'un libellé ne doit pas porter.</summary>
+        Invalid,
+    }
+
+    /// <summary>Enregistre une candidature. Rend faux quand elle n'entre pas dans la file.</summary>
+    public bool Submit(string sourceAddress, DirectoryEntry entry) => Consider(sourceAddress, entry) is SubmitOutcome.Queued;
+
+    /// <summary>
+    /// Examine une candidature, l'enregistre si elle est nouvelle, et dit ce qu'il en est advenu.
+    /// </summary>
+    /// <remarks>
+    /// Une candidature déjà connue compte dans le frein de la source comme
+    /// une nouvelle : sans cela, rejouer sans fin la candidature d'un service
+    /// existant ne coûtait rien, et chaque répétition atteignait l'autorité.
+    /// </remarks>
+    public SubmitOutcome Consider(string sourceAddress, DirectoryEntry entry)
+    {
+        if (RendezvousAddress.TryParse(entry.Address, out _, out _) is false || ServiceLabel.IsAcceptable(entry.Label) is false)
+            return SubmitOutcome.Invalid;
 
         lock (_gate)
         {
@@ -81,13 +107,15 @@ public sealed class PeerDirectory(string peersPath, string pendingPath, IClock? 
             }
 
             if (_lastSubmit.ContainsKey(sourceAddress))
-                return false;
+                return SubmitOutcome.Throttled;
+
+            _lastSubmit[sourceAddress] = now;
 
             var pending = Read(pendingPath);
 
             if (KnownLocked().Any(known => known.Address == entry.Address)
                 || pending.Any(waiting => waiting.Address == entry.Address))
-                return false;
+                return SubmitOutcome.Known;
 
             // Les plus anciennes cèdent la place : une file pleine ne doit pas
             // fermer la porte à qui arrive aujourd'hui.
@@ -96,9 +124,7 @@ public sealed class PeerDirectory(string peersPath, string pendingPath, IClock? 
 
             pending.Add(entry);
             Write(pendingPath, pending);
-
-            _lastSubmit[sourceAddress] = now;
-            return true;
+            return SubmitOutcome.Queued;
         }
     }
 
