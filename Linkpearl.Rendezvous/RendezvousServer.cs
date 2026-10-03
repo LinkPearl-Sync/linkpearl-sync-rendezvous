@@ -326,17 +326,8 @@ public sealed class RendezvousServer(
 
                     ReflectLoop.Turn();
 
-                    if (received.Buffer.Length == 0 || received.Buffer[0] != RendezvousKind.Reflect)
+                    if (Reflection(received.Buffer, received.RemoteEndPoint) is not { } reply)
                         continue;
-
-                    var from = Normalize(received.RemoteEndPoint);
-                    var address = from.Address.GetAddressBytes();
-
-                    var reply = new byte[2 + address.Length + 2];
-                    reply[0] = RendezvousKind.Reflected;
-                    reply[1] = (byte)address.Length;
-                    address.CopyTo(reply.AsSpan(2));
-                    BinaryPrimitives.WriteUInt16BigEndian(reply.AsSpan(2 + address.Length), (ushort)from.Port);
 
                     // L'envoi est dans le même filet que la réception : une
                     // destination injoignable fait lever l'envoi sur certaines
@@ -359,6 +350,78 @@ public sealed class RendezvousServer(
             ReflectLoop.Exit();
         }
     }
+
+    /// <summary>Taille d'une requête de réflexion bourrée, telle que le client l'enverra.</summary>
+    public const int PaddedReflectSize = 32;
+
+    /// <summary>
+    /// La réponse à une requête de réflexion, ou null s'il ne faut rien répondre.
+    /// </summary>
+    /// <remarks>
+    /// L'UDP ne prouve pas son adresse source : une requête usurpée fait
+    /// répondre le service à une victime. Deux bornes en font un mauvais
+    /// réflecteur. Un seau de débit par source (et par /48 en IPv6), au-delà
+    /// duquel on se tait. Et une réponse jamais plus grosse que la requête,
+    /// dès qu'elle est bourrée à 32 octets (un octet de type, puis des
+    /// zéros) : la réponse en fait au plus vingt, l'attaquant paie donc
+    /// davantage qu'il ne fait envoyer.
+    ///
+    /// Les clients actuels envoient un seul octet, et reçoivent jusqu'à
+    /// vingt : on leur répond encore, sous le même seau, pour ne pas casser
+    /// la découverte d'adresse des plugins déjà installés. Quand le plugin
+    /// bourré sera assez répandu, il faudra exiger le bourrage et ignorer les
+    /// requêtes plus courtes.
+    /// </remarks>
+    public byte[]? Reflection(byte[] request, IPEndPoint remote)
+    {
+        if (request.Length == 0 || request[0] != RendezvousKind.Reflect)
+            return null;
+
+        var from = Normalize(remote);
+
+        if (ReflectRateExceeded(from.Address))
+            return null;
+
+        var address = from.Address.GetAddressBytes();
+
+        var reply = new byte[2 + address.Length + 2];
+        reply[0] = RendezvousKind.Reflected;
+        reply[1] = (byte)address.Length;
+        address.CopyTo(reply.AsSpan(2));
+        BinaryPrimitives.WriteUInt16BigEndian(reply.AsSpan(2 + address.Length), (ushort)from.Port);
+
+        // Toujours vrai avec une réponse de vingt octets au plus ; écrit pour
+        // qu'une réponse qui grossirait un jour ne devienne pas un amplificateur.
+        if (request.Length >= PaddedReflectSize && reply.Length > request.Length)
+            return null;
+
+        return reply;
+    }
+
+    private bool ReflectRateExceeded(IPAddress source)
+    {
+        var limits = Limits;
+        var now = clock.UtcNow;
+
+        if (Count(_reflectRate, AddressBucket.Of(source), now) > limits.ReflectionsPerMinute)
+            return true;
+
+        return AddressBucket.Wide(source) is { } wide
+               && Count(_reflectRate, $"large:{wide}", now) > limits.ReflectionsPerMinute * PrefixRateFactor;
+    }
+
+    private static int Count(ConcurrentDictionary<string, (int Count, DateTimeOffset Window)> rate, string key, DateTimeOffset now)
+        => rate.AddOrUpdate(
+            key,
+            _ => (1, now),
+            (_, existing) => now - existing.Window > RateWindow ? (1, now) : (existing.Count + 1, existing.Window)).Count;
+
+    /// <summary>Le débit de réflexion par source, à part de celui des trames TCP.</summary>
+    /// <remarks>
+    /// À part : un client qui cherche son adresse en rafale pendant un
+    /// perçage ne doit pas se voir refuser ses annonces, et inversement.
+    /// </remarks>
+    private readonly ConcurrentDictionary<string, (int Count, DateTimeOffset Window)> _reflectRate = new(StringComparer.Ordinal);
 
     /// <summary>
     /// Garde une connexion si les plafonds le permettent, la ferme sinon.
@@ -1166,10 +1229,13 @@ public sealed class RendezvousServer(
 
         // Une fenêtre close ne pèse plus sur personne : l'entrée s'efface, sans
         // quoi le limiteur garderait une trace de chaque adresse jamais vue.
-        foreach (var (bucket, entry) in _rate)
+        foreach (var rate in new[] { _rate, _reflectRate })
         {
-            if (now - entry.Window > RateWindow)
-                _rate.TryRemove(new KeyValuePair<string, (int, DateTimeOffset)>(bucket, entry));
+            foreach (var (bucket, entry) in rate)
+            {
+                if (now - entry.Window > RateWindow)
+                    rate.TryRemove(new KeyValuePair<string, (int, DateTimeOffset)>(bucket, entry));
+            }
         }
     }
 

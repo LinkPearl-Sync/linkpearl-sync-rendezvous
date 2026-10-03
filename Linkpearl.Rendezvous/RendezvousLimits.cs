@@ -25,6 +25,18 @@ public sealed record RendezvousLimits
     public int AnnouncementsPerMinute { get; init; } = 60;
 
     /// <summary>
+    /// Réponses de réflexion UDP par minute et par source (un /64 en IPv6).
+    /// </summary>
+    /// <remarks>
+    /// Le plugin redemande toutes les 300 ms tant qu'il n'a pas de réponse,
+    /// soit trois ou quatre requêtes par découverte, et il en fait une par
+    /// tentative vers un pair : cent vingt laissent des dizaines de
+    /// tentatives par minute, et bornent ce qu'une source usurpée fait
+    /// envoyer à sa victime à deux réponses par seconde.
+    /// </remarks>
+    public int ReflectionsPerMinute { get; init; } = 120;
+
+    /// <summary>
     /// Connexions TCP tenues en même temps, toutes adresses confondues.
     /// </summary>
     /// <remarks>
