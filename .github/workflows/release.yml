@@ -18,6 +18,14 @@ on:
     tags:
       - 'v*'
 
+# Une publication à la fois, et jamais annulée en cours : deux tags poussés
+# ensemble se disputeraient la release « la plus récente » que lisent les
+# serveurs, et une publication interrompue laisserait un brouillon à moitié
+# rempli.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
   release:
     runs-on: ubuntu-latest
@@ -35,6 +43,13 @@ jobs:
     steps:
       - name: Récupérer le dépôt
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          # Le jeton ne reste pas dans .git/config : rien de ce qui s'exécute
+          # ensuite (compilation, tests, paquets restaurés) n'a à écrire sur
+          # le dépôt. Seule la publication s'en sert, et le reçoit à part.
+          persist-credentials: false
+          # Tout l'historique, pour vérifier que le commit tagué est sur main.
+          fetch-depth: 0
 
       - name: Lire le tag
         id: tag
@@ -54,17 +69,72 @@ jobs:
           echo "VERSION=$VERSION" >> "$GITHUB_OUTPUT"
           echo "PRERELEASE=$PRERELEASE" >> "$GITHUB_OUTPUT"
 
+      - name: Vérifier que le commit tagué est sur main
+        # Un tag peut se poser sur n'importe quel commit, y compris celui d'une
+        # branche que personne n'a relue : sans ce contrôle, pousser un tag
+        # suffisait à faire signer du code qui n'est jamais passé par main.
+        run: |
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "Le commit $GITHUB_SHA n'est pas un ancêtre de origin/main : rien n'est publié." >&2
+            exit 1
+          fi
+
+      - name: Lire l'urgence
+        id: urgency
+        # Une ligne « urgent », seule, dans le message du tag annoté réduit le
+        # délai de garde des serveurs à une heure (git tag -s -a vX.Y.Z -m
+        # vX.Y.Z -m urgent). Ni un mot dans une phrase (« rien d'urgent »), ni
+        # un tag léger, qui reprendrait le message du commit. Le checkout ne
+        # rapporte pas l'objet du tag : on va le chercher.
+        #
+        # L'urgence exige en plus que le tag soit signé par une clé SSH de
+        # .github/release-signers, lu sur main et non sur le commit tagué :
+        # pousser un tag ne suffit plus à l'accorder, il faut la clé du
+        # mainteneur. Un tag urgent mal signé fait échouer la publication
+        # plutôt que de partir sans urgence en silence. Ce contrôle tourne
+        # dans la CI, donc ne protège pas d'une CI détournée : c'est le
+        # plancher d'une heure inscrit dans Updater.cs qui couvre ce cas.
+        if: steps.tag.outputs.PRERELEASE == 'false'
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          git fetch --force origin "refs/tags/$TAG:refs/tags/$TAG"
+          URGENT=false
+          if [ "$(git cat-file -t "$TAG")" = tag ] \
+             && git tag -l --format='%(contents:subject)%0a%(contents:body)' "$TAG" | grep -qx urgent; then
+            SIGNERS="$RUNNER_TEMP/release-signers"
+            git show origin/main:.github/release-signers > "$SIGNERS"
+            if ! grep -qv -e '^[[:space:]]*#' -e '^[[:space:]]*$' "$SIGNERS"; then
+              echo "Tag urgent, mais .github/release-signers ne porte aucune clé : rien n'est publié." >&2
+              exit 1
+            fi
+            if ! git -c gpg.ssh.allowedSignersFile="$SIGNERS" verify-tag "$TAG"; then
+              echo "Tag urgent sans signature d'une clé de .github/release-signers : rien n'est publié." >&2
+              exit 1
+            fi
+            URGENT=true
+            echo "::warning title=Release urgente::$TAG réduit le délai de garde des serveurs à une heure."
+          fi
+          echo "URGENT=$URGENT" >> "$GITHUB_OUTPUT"
+
       - name: Installer .NET
         uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9  # v4
         with:
           dotnet-version: '10.0.x'
 
+      - name: Restaurer en mode verrouillé
+        # Les paquets doivent être ceux de packages.lock.json, à l'empreinte
+        # près. CI=true rend aussi verrouillées les restaurations implicites
+        # des étapes suivantes (voir Directory.Build.props).
+        run: dotnet restore Linkpearl.Rendezvous.Tests/Linkpearl.Rendezvous.Tests.csproj --locked-mode
+
       - name: Vérifier
         # Un échec ici doit empêcher la publication, pas être découvert par un
         # opérateur après sa mise à jour.
         run: |
-          dotnet build Linkpearl.Rendezvous/Linkpearl.Rendezvous.csproj -c Release -warnaserror --nologo
-          dotnet test Linkpearl.Rendezvous.Tests/Linkpearl.Rendezvous.Tests.csproj --nologo
+          dotnet build Linkpearl.Rendezvous/Linkpearl.Rendezvous.csproj -c Release -warnaserror --no-restore --nologo
+          dotnet test Linkpearl.Rendezvous.Tests/Linkpearl.Rendezvous.Tests.csproj --no-restore --nologo
 
       - name: Compiler le binaire autonome
         env:
@@ -82,30 +152,29 @@ jobs:
           cd out && sha256sum lprdv lprdv.service lprdv-update.service lprdv-update.timer > lprdv.sha256 && cat lprdv.sha256
 
       - name: Signer le manifeste
-        # Une pré-version n'est jamais installée automatiquement : pas de manifeste.
+        # Une pré-version n'est jamais installée automatiquement : pas de
+        # manifeste. Il couvre le binaire et les trois unités.
         if: steps.tag.outputs.PRERELEASE == 'false'
         env:
           VERSION: ${{ steps.tag.outputs.VERSION }}
-          TAG: ${{ github.ref_name }}
+          LPRDV_URGENT: ${{ steps.urgency.outputs.URGENT }}
           LPRDV_RELEASE_KEY: ${{ secrets.LPRDV_RELEASE_KEY }}
-        # Une ligne « urgent », seule, dans le message du tag annoté lève le
-        # délai de garde (git tag -a vX.Y.Z -m vX.Y.Z -m urgent). Ni un mot
-        # dans une phrase (« rien d'urgent »), ni un tag léger, qui reprendrait
-        # le message du commit. Le checkout ne rapporte pas l'objet du tag : on
-        # va le chercher.
-        run: |
-          git fetch --force origin "refs/tags/$TAG:refs/tags/$TAG"
-          if [ "$(git cat-file -t "$TAG")" = tag ] && git tag -l --format='%(contents)' "$TAG" | grep -qx urgent; then
-            export LPRDV_URGENT=true
-          fi
-          ./out/lprdv release-sign "$VERSION" out
+        run: ./out/lprdv release-sign "$VERSION" out
 
-      - name: Publier la version
+      - name: Créer la release en brouillon
+        # En brouillon d'abord : une release publiée est immuable et n'accepte
+        # plus aucun fichier. Tout est attaché au brouillon, qui n'est publié
+        # qu'ensuite, complet.
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2
         with:
           tag_name: ${{ github.ref_name }}
-          name: v${{ steps.tag.outputs.VERSION }}
+          name: v${{ steps.tag.outputs.VERSION }}${{ steps.urgency.outputs.URGENT == 'true' && ' (urgente)' || '' }}
+          draft: true
           prerelease: ${{ steps.tag.outputs.PRERELEASE == 'true' }}
+          # Une release urgente le dit en tête de ses notes, où tout opérateur
+          # et tout observateur du dépôt la voit.
+          body: >-
+            ${{ steps.urgency.outputs.URGENT == 'true' && '**Release urgente** : les serveurs à mise à jour automatique l''installent une heure après sa signature, au lieu de vingt-quatre. Son tag est signé par une clé de `.github/release-signers`.' || '' }}
           files: |
             out/lprdv
             out/lprdv.service
@@ -115,3 +184,30 @@ jobs:
             out/lprdv.release.json
             out/lprdv.release.json.sig
           generate_release_notes: true
+
+      - name: Publier la release
+        env:
+          TAG: ${{ github.ref_name }}
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "$TAG" --draft=false --repo "$GITHUB_REPOSITORY"
+
+      - name: Résumé
+        env:
+          TAG: ${{ github.ref_name }}
+          URGENT: ${{ steps.urgency.outputs.URGENT }}
+        # Tracé dans le résumé de l'exécution, qui reste attaché au tag : une
+        # urgence se retrouve après coup sans relire les journaux.
+        run: |
+          {
+            echo "### Publication $TAG"
+            echo
+            if [ "$URGENT" = true ]; then
+              echo "**Urgente** : délai de garde d'une heure au lieu de vingt-quatre, signature du tag vérifiée."
+            else
+              echo "Délai de garde ordinaire de vingt-quatre heures."
+            fi
+            echo
+            echo '```'
+            cat out/lprdv.sha256
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

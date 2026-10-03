@@ -77,8 +77,11 @@ LPRDV_HOST=debian@rdv.linkpearl.eorzea.events LPRDV_KEY=~/.ssh/linkpearl_rdv ./d
   l'environnement GitHub `release`. Ne jamais l'écraser ni la régénérer : la perdre oblige
   à publier une release signée par une autre clé déjà inscrite, sans quoi plus aucun
   serveur ne se met à jour seul.
-- Publier une correction urgente : `git tag -a vX.Y.Z -m vX.Y.Z -m urgent` (une ligne
-  `urgent` seule, dans un tag annoté), qui lève le délai de garde de 24 heures.
+- Publier une correction urgente : `git tag -s -a vX.Y.Z -m vX.Y.Z -m urgent` (une ligne
+  `urgent` seule, dans un tag annoté et signé par une clé SSH de `.github/release-signers`),
+  qui réduit le délai de garde de 24 heures à une. Un tag urgent non signé fait échouer la
+  publication. L'heure restante est le temps de retirer une release urgente qu'on n'a pas
+  voulue : elle vit dans `Updater.UrgentGuard`, hors de portée du workflow.
 - Vérifier de l'extérieur depuis le dépôt du plugin : lancer en parallèle
   `dotnet run --project Linkpearl.Harness -c Release -- rdv rdv.linkpearl.eorzea.events 47900 alice`
   et la même avec `bob`. Les deux doivent finir par « TOUT EST PASSÉ ».
@@ -87,7 +90,8 @@ LPRDV_HOST=debian@rdv.linkpearl.eorzea.events LPRDV_KEY=~/.ssh/linkpearl_rdv ./d
 - Jamais de service lancé à la main dans un terminal SSH : il meurt avec la session, et
   le premier déploiement public est resté hors ligne sans que personne le voie.
 
-Publier une version : `git tag -a vX.Y.Z -m vX.Y.Z` sur `main`, puis pousser le tag.
+Publier une version : `git tag -a vX.Y.Z -m vX.Y.Z` sur un commit de `main` (le workflow
+refuse tout autre commit), puis pousser le tag.
 `.github/workflows/release.yml` vérifie (build sans warning, tests), compile le binaire
 autonome, signe le manifeste de mise à jour et publie la release avec `lprdv`, `lprdv.service`,
 `lprdv-update.service`, `lprdv-update.timer`, `lprdv.sha256`, `lprdv.release.json` et sa

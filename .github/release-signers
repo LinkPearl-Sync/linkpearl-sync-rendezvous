@@ -1,0 +1,14 @@
+# Clés SSH autorisées à signer un tag de release urgente, au format
+# allowed_signers de ssh-keygen (une ligne par clé) :
+#
+#   mainteneur@linkpearl namespaces="git" ssh-ed25519 AAAA...
+#
+# Une ligne « urgent » dans le message d'un tag ne réduit le délai de garde
+# des serveurs que si ce tag est signé par l'une de ces clés :
+#
+#   git tag -s -a vX.Y.Z -m vX.Y.Z -m urgent      (gpg.format=ssh, user.signingkey)
+#
+# Le workflow lit ce fichier sur main, jamais sur le commit tagué. Sans clé
+# ici, un tag urgent fait échouer la publication : le mainteneur doit y
+# inscrire la sienne avant d'en avoir besoin. Une clé gardée hors de GitHub,
+# pour qu'un jeton volé ou une CI détournée ne puisse pas l'utiliser.

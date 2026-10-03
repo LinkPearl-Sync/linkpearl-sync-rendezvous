@@ -62,7 +62,10 @@ touche jamais à `/var/lib/lprdv`. Son détail est dans le README du site.
 
 Chaque release publie `lprdv`, `lprdv.service`, `lprdv-update.service`, `lprdv-update.timer`,
 `lprdv.sha256` (qui couvre le binaire et les trois unités), ainsi que `lprdv.release.json` et
-sa signature `lprdv.release.json.sig`.
+sa signature `lprdv.release.json.sig`, qui couvrent eux aussi le binaire et les trois unités.
+Le workflow ne publie qu'un commit déjà sur `main`, restaure les paquets en mode verrouillé
+(`packages.lock.json`), et crée la release en brouillon avant de la publier complète : une
+release publiée est immuable.
 
 ## Déployer la production
 
@@ -89,14 +92,19 @@ Les serveurs installés par `install.sh` (site) se mettent à jour seuls : `lprd
 lance `lprdv update` quinze minutes après le démarrage, puis chaque heure, décalé au hasard
 jusqu'à une heure. Une release n'est installée que si son manifeste
 `lprdv.release.json` porte une signature d'une clé de `ReleaseKeys.cs`, et seulement 24 heures
-après sa signature, sauf si le message du tag annoté porte une ligne `urgent` seule
-(`git tag -a vX.Y.Z -m vX.Y.Z -m urgent`). Une version qui ne répond pas sur `/healthz` dans
+après sa signature. Une release urgente n'attend qu'une heure : le message de son tag annoté
+porte une ligne `urgent` seule, et le tag est signé par une clé SSH inscrite dans
+`.github/release-signers` (`git tag -s -a vX.Y.Z -m vX.Y.Z -m urgent`), sans quoi la
+publication échoue. L'heure de garde est inscrite dans le binaire installé, hors de portée du
+workflow, et la release se publie sous le nom « vX.Y.Z (urgente) » avec un avertissement en
+tête de ses notes. Une version qui ne répond pas sur `/healthz` dans
 les 30 secondes est défaite (retour à `lprdv.previous`) et n'est plus retentée. Retirer une release pendant les 24 heures (la supprimer, ou la
 passer en pré-version) suffit à ce que personne ne l'installe. La production n'a pas de
 minuteur : `deploy.sh` la met à jour, et elle essuie chaque version la première.
 
-La ronde ne pose que `lprdv` et `lprdv.service`, les deux fichiers que couvre le manifeste :
-un changement de `lprdv-update.service` ou du minuteur demande de relancer `install.sh`. Avant
+La ronde ne pose que `lprdv` et `lprdv.service` : un changement de `lprdv-update.service` ou
+du minuteur demande de relancer `install.sh`. Le manifeste signé couvre aussi ces deux unités,
+qui tournent en root ; un manifeste antérieur, qui ne les porte pas, reste lisible. Avant
 de rien poser, elle vérifie que le service répond sur `http://127.0.0.1:47901/healthz` : un
 service arrêté par son opérateur n'est pas relancé, et un service lancé avec `--no-admin` ou
 un autre `--admin-port` n'est jamais mis à jour. Une pré-version ne porte pas de manifeste et

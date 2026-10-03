@@ -30,7 +30,8 @@ sur toutes les machines du réseau d'un coup.
   automatiquement que 24 heures après sa signature. Pendant ce délai, la
   retirer (la supprimer, ou la passer en pré-version) suffit à ce qu'aucun
   serveur ne l'installe. Le VPS de production, mis à jour par `deploy.sh`,
-  l'essuie en premier. Une release marquée urgente se passe du délai.
+  l'essuie en premier. Une release marquée urgente n'attend qu'une heure (voir le README :
+  l'urgence exige désormais un tag signé, et l'heure de garde vit dans le binaire).
 - **La version installée vérifie la suivante.** Le programme de mise à jour
   est une sous-commande du binaire en place, déjà de confiance ; la clé
   publique y est inscrite.
