@@ -111,6 +111,7 @@ public sealed class RelayQuotaTests
         Assert.True(await a.IsSilentAsync(Short));
         await b.SendAsync(RendezvousWire.RelayOpen(Ticket(0x31)));
         Assert.Equal(RendezvousKind.RelayReady, (await a.ReadFrameAsync())![0]);
+        await ServerHarness.WaitUntilAsync(() => harness.Server.Snapshot().ActiveRelays is 1);
 
         // B ne lit plus rien : A pousse jusqu'à ce que le relais tombe.
         var block = RendezvousWire.RelayData(new byte[16 * 1024]);
