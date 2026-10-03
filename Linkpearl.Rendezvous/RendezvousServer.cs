@@ -199,9 +199,23 @@ public sealed class RendezvousServer(
     /// session par boîte faisait que la seconde ouverture écrasait la
     /// première, qui ne recevait plus rien sans le savoir, et que le départ de
     /// l'une fermait la boîte de l'autre.
+    ///
+    /// Une boîte réclamée (<see cref="RendezvousKind.MailboxClaim"/>) n'a
+    /// qu'un détenteur, et les ouvertures ordinaires des autres sessions n'y
+    /// prennent pas place. Une adresse personnelle dérive d'un nom public :
+    /// sans cela, n'importe qui l'ouvrait en même temps que son titulaire et
+    /// lisait les demandes qui lui étaient adressées.
     /// </remarks>
     private readonly Lock _mailboxGate = new();
-    private readonly Dictionary<string, HashSet<PeerSession>> _mailboxes = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, Mailbox> _mailboxes = new(StringComparer.Ordinal);
+
+    /// <summary>Les sessions qui tiennent une boîte, et celle qui l'a réclamée s'il y en a une.</summary>
+    private sealed class Mailbox
+    {
+        public HashSet<PeerSession> Holders { get; } = new(ReferenceEqualityComparer.Instance);
+
+        public PeerSession? Exclusive { get; set; }
+    }
 
     // Incrémentés depuis la boucle de service de n'importe quelle session :
     // un « ++ » y perdrait des unités.
@@ -443,6 +457,7 @@ public sealed class RendezvousServer(
                     RendezvousKind.Announce => await HandleAnnounceAsync(session, frame, ct).ConfigureAwait(false),
                     RendezvousKind.RelayOpen => await HandleRelayAsync(session, frame, ct).ConfigureAwait(false),
                     RendezvousKind.MailboxOpen => await HandleMailboxOpenAsync(session, frame, ct).ConfigureAwait(false),
+                    RendezvousKind.MailboxClaim => await HandleMailboxClaimAsync(session, frame, ct).ConfigureAwait(false),
                     RendezvousKind.MailboxQuery => await HandleMailboxQueryAsync(session, frame, ct).ConfigureAwait(false),
                     RendezvousKind.MailboxDeposit => await HandleMailboxDepositAsync(session, frame, ct).ConfigureAwait(false),
                     RendezvousKind.DirectoryQuery => await HandleDirectoryQueryAsync(session, ct).ConfigureAwait(false),
@@ -786,15 +801,98 @@ public sealed class RendezvousServer(
     }
 
     /// <summary>Ouvre les boîtes d'un client, qui recevra les dépôts sur cette connexion.</summary>
+    /// <remarks>
+    /// Sans réponse, comme avant les boîtes exclusives : une adresse tenue en
+    /// exclusivité par une autre session, ou qui a déjà tous ses détenteurs,
+    /// est ignorée sans le dire. Le client qui veut savoir réclame.
+    /// </remarks>
     private async Task<bool> HandleMailboxOpenAsync(PeerSession session, byte[] frame, CancellationToken ct)
     {
-        if (RendezvousWire.TryReadAddresses(frame, out var addresses, out _) is false)
+        if (await ReadMailboxRequestAsync(session, frame, ct).ConfigureAwait(false) is not { } keys)
             return false;
+
+        var limits = Limits;
+
+        lock (_mailboxGate)
+        {
+            foreach (var key in keys)
+            {
+                if (_mailboxes.TryGetValue(key, out var mailbox) is false)
+                    _mailboxes[key] = mailbox = new Mailbox();
+
+                if (mailbox.Holders.Contains(session))
+                    continue;
+
+                if (mailbox.Exclusive is not null || mailbox.Holders.Count >= limits.MaxMailboxHolders)
+                    continue;
+
+                mailbox.Holders.Add(session);
+                session.RememberMailbox(key);
+            }
+
+            DropEmptyLocked(keys);
+        }
+
+        Note($"boîtes ouvertes ({keys.Count})", $"par {session.Address}");
+        return true;
+    }
+
+    /// <summary>
+    /// Réclame des boîtes pour cette seule session, et dit lesquelles elle tient.
+    /// </summary>
+    /// <remarks>
+    /// Une boîte libre, ou que cette session tient déjà seule, devient la
+    /// sienne. Une boîte qu'une autre session tient, même sans l'avoir
+    /// réclamée, reste à cette autre : le premier arrivé garde sa place, et
+    /// c'est le bit baissé qui avertit le client qu'un autre écoute à son nom.
+    /// </remarks>
+    private async Task<bool> HandleMailboxClaimAsync(PeerSession session, byte[] frame, CancellationToken ct)
+    {
+        if (RendezvousWire.TryReadAddresses(frame, out var addresses, out _) is false
+            || await ReadMailboxRequestAsync(session, frame, ct).ConfigureAwait(false) is null)
+            return false;
+
+        var held = new List<bool>(addresses.Count);
+
+        lock (_mailboxGate)
+        {
+            foreach (var key in addresses.Select(Convert.ToHexStringLower))
+            {
+                if (_mailboxes.TryGetValue(key, out var mailbox) is false)
+                    _mailboxes[key] = mailbox = new Mailbox();
+
+                var alone = mailbox.Holders.Count is 0
+                    || (mailbox.Holders.Count is 1 && mailbox.Holders.Contains(session));
+
+                if (alone)
+                {
+                    mailbox.Holders.Add(session);
+                    mailbox.Exclusive = session;
+                    session.RememberMailbox(key);
+                }
+
+                held.Add(alone);
+            }
+        }
+
+        await session.SendAsync(RendezvousWire.MailboxClaimed(held), ct).ConfigureAwait(false);
+        Note($"boîtes réclamées ({held.Count(bit => bit)} sur {held.Count})", $"par {session.Address}");
+        return true;
+    }
+
+    /// <summary>
+    /// Lit les adresses d'une ouverture ou d'une réclamation, sous les mêmes plafonds.
+    /// </summary>
+    /// <returns>Les clés distinctes, ou null si la session doit être coupée.</returns>
+    private async Task<List<string>?> ReadMailboxRequestAsync(PeerSession session, byte[] frame, CancellationToken ct)
+    {
+        if (RendezvousWire.TryReadAddresses(frame, out var addresses, out _) is false)
+            return null;
 
         if (RateExceeded(session.Bucket, ref _refusedMailboxes))
         {
             await session.SendAsync(RendezvousWire.Error("trop d'ouvertures"), ct).ConfigureAwait(false);
-            return false;
+            return null;
         }
 
         var keys = addresses.Select(Convert.ToHexStringLower).Distinct(StringComparer.Ordinal).ToList();
@@ -802,23 +900,20 @@ public sealed class RendezvousServer(
         if (session.MailboxCount + keys.Count(key => session.HasMailbox(key) is false) > Limits.MaxMailboxesPerSession)
         {
             await session.SendAsync(RendezvousWire.Error("trop de boîtes sur cette connexion"), ct).ConfigureAwait(false);
-            return false;
+            return null;
         }
 
-        lock (_mailboxGate)
+        return keys;
+    }
+
+    /// <summary>Retire les boîtes restées sans détenteur après une ouverture refusée.</summary>
+    private void DropEmptyLocked(IEnumerable<string> keys)
+    {
+        foreach (var key in keys)
         {
-            foreach (var key in keys)
-            {
-                if (_mailboxes.TryGetValue(key, out var holders) is false)
-                    _mailboxes[key] = holders = new HashSet<PeerSession>(ReferenceEqualityComparer.Instance);
-
-                holders.Add(session);
-                session.RememberMailbox(key);
-            }
+            if (_mailboxes.TryGetValue(key, out var mailbox) && mailbox.Holders.Count is 0)
+                _mailboxes.Remove(key);
         }
-
-        Note($"boîtes ouvertes ({keys.Count})", $"par {session.Address}");
-        return true;
     }
 
     private async Task<bool> HandleMailboxQueryAsync(PeerSession session, byte[] frame, CancellationToken ct)
@@ -877,7 +972,7 @@ public sealed class RendezvousServer(
         PeerSession[] recipients;
 
         lock (_mailboxGate)
-            recipients = _mailboxes.TryGetValue(key, out var holders) ? [.. holders] : [];
+            recipients = _mailboxes.TryGetValue(key, out var mailbox) ? [.. mailbox.Holders] : [];
 
         if (recipients.Length is 0)
         {
@@ -942,7 +1037,15 @@ public sealed class RendezvousServer(
         {
             foreach (var key in session.Mailboxes)
             {
-                if (_mailboxes.TryGetValue(key, out var holders) && holders.Remove(session) && holders.Count is 0)
+                if (_mailboxes.TryGetValue(key, out var mailbox) is false || mailbox.Holders.Remove(session) is false)
+                    continue;
+
+                // Libérée avec son détenteur : une boîte réclamée par une
+                // session partie redevient libre pour la suivante.
+                if (ReferenceEquals(mailbox.Exclusive, session))
+                    mailbox.Exclusive = null;
+
+                if (mailbox.Holders.Count is 0)
                     _mailboxes.Remove(key);
             }
         }

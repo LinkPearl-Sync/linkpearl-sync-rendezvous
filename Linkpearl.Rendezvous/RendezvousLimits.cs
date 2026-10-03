@@ -51,6 +51,18 @@ public sealed record RendezvousLimits
     /// </remarks>
     public int MaxMailboxesPerSession { get; init; } = 64;
 
+    /// <summary>
+    /// Sessions qui peuvent tenir ensemble une même boîte non réclamée.
+    /// </summary>
+    /// <remarks>
+    /// Plusieurs détenteurs ont une raison d'être : deux clients sur la même
+    /// machine, une reconnexion dont l'ancienne session n'est pas encore
+    /// tombée. Quatre couvrent ces cas avec de la marge. Au-delà, n'importe
+    /// qui pouvait s'abonner par centaines à une boîte de présence et
+    /// démultiplier chaque dépôt qu'elle reçoit.
+    /// </remarks>
+    public int MaxMailboxHolders { get; init; } = 4;
+
     /// <summary>Jetons sur lesquels une même connexion peut attendre un pair.</summary>
     public int MaxWaitingKeysPerSession { get; init; } = 64;
 
