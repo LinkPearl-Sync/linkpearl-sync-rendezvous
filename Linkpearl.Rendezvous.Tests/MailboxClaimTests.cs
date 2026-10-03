@@ -115,14 +115,55 @@ public sealed class MailboxClaimTests
         Assert.Equal(new[] { true, true }, await ClaimAsync(client, Box(1), Box(2)));
 
         await client.SendAsync(RendezvousWire.MailboxClaim([Box(3)]));
-        var frame = await client.ReadFrameAsync();
 
-        Assert.Equal(RendezvousKind.Error, frame![0]);
+        // Le refus dit sa raison, et jamais « trame inattendue » : c'est à ce
+        // texte que le client reconnaît un service qui ignore MailboxClaim.
+        Assert.Equal("trop de boîtes sur cette connexion", ErrorText(await client.ReadFrameAsync()));
+        Assert.Null(await client.ReadFrameAsync());
+    }
 
-        // Une seconde erreur générique peut suivre, puis la fermeture.
-        byte[]? next;
-        while ((next = await client.ReadFrameAsync()) is not null)
-            Assert.Equal(RendezvousKind.Error, next[0]);
+    private static string ErrorText(byte[]? frame)
+    {
+        Assert.NotNull(frame);
+        Assert.Equal(RendezvousKind.Error, frame[0]);
+        return System.Text.Encoding.UTF8.GetString(frame, 1, frame.Length - 1);
+    }
+
+    [Fact]
+    public async Task Une_reclamation_malformee_ne_se_dit_pas_inattendue()
+    {
+        await using var harness = await ServerHarness.StartAsync();
+
+        var client = await harness.ConnectAsync();
+        await client.SendAsync([RendezvousKind.MailboxClaim, 0]);
+
+        Assert.NotEqual(RendezvousServer.UnexpectedFrame, ErrorText(await client.ReadFrameAsync()));
+        Assert.Null(await client.ReadFrameAsync());
+    }
+
+    [Fact]
+    public async Task Une_reclamation_au_dela_du_debit_ne_se_dit_pas_inattendue()
+    {
+        await using var harness = await ServerHarness.StartAsync(new RendezvousLimits { AnnouncementsPerMinute = 1 });
+
+        var client = await harness.ConnectAsync();
+        Assert.Equal(new[] { true }, await ClaimAsync(client, Box(1)));
+        await client.SendAsync(RendezvousWire.MailboxClaim([Box(2)]));
+
+        Assert.NotEqual(RendezvousServer.UnexpectedFrame, ErrorText(await client.ReadFrameAsync()));
+        Assert.Null(await client.ReadFrameAsync());
+    }
+
+    [Fact]
+    public async Task Un_type_inconnu_recoit_trame_inattendue_puis_la_fermeture()
+    {
+        await using var harness = await ServerHarness.StartAsync();
+
+        var client = await harness.ConnectAsync();
+        await client.SendAsync([0xEE]);
+
+        Assert.Equal(RendezvousServer.UnexpectedFrame, ErrorText(await client.ReadFrameAsync()));
+        Assert.Null(await client.ReadFrameAsync());
     }
 
     [Fact]

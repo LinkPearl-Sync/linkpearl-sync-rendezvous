@@ -494,7 +494,7 @@ public sealed class RendezvousServer(
 
                 session.Touch(clock.UtcNow);
 
-                var handled = frame[0] switch
+                bool? handled = frame[0] switch
                 {
                     RendezvousKind.Announce => await HandleAnnounceAsync(session, frame, ct).ConfigureAwait(false),
                     RendezvousKind.RelayOpen => await HandleRelayAsync(session, frame, ct).ConfigureAwait(false),
@@ -512,14 +512,23 @@ public sealed class RendezvousServer(
                     // plugin ne s'en sert plus : un dépôt lisible par le service
                     // et retirable par qui devine six octets ne servait plus
                     // personne, et restait une surface à défendre.
-                    _ => false,
+                    _ => null,
                 };
 
-                if (handled is false)
+                // « trame inattendue » est réservé aux types inconnus : c'est à
+                // ce texte exact que le client reconnaît un service trop ancien
+                // pour une trame (MailboxClaim, par exemple), et en conclut
+                // qu'il n'a pas la garantie qu'elle apporte. Un refus d'une
+                // trame connue a déjà dit sa raison dans son propre texte :
+                // la session est coupée sans en ajouter un second.
+                if (handled is null)
                 {
-                    await session.SendAsync(RendezvousWire.Error("trame inattendue"), ct).ConfigureAwait(false);
+                    await session.SendAsync(RendezvousWire.Error(UnexpectedFrame), ct).ConfigureAwait(false);
                     return;
                 }
+
+                if (handled is false)
+                    return;
 
                 if (session.IsParked)
                 {
@@ -658,6 +667,12 @@ public sealed class RendezvousServer(
             ? ServeChunksAsync(session, page, Consensus?.Status, "ce service ne publie pas l'état du réseau", RendezvousWire.NetworkStatusPage, ct)
             : RefuseAsync(session, "demande d'état du réseau malformée", ct);
 
+    /// <summary>Le refus d'un type de trame que ce service ne connaît pas. Voir ServeAsync.</summary>
+    public const string UnexpectedFrame = "trame inattendue";
+
+    /// <summary>Le refus d'une trame connue, mais dont la longueur ou le contenu est faux.</summary>
+    private const string Malformed = "trame malformée";
+
     private static async Task<bool> RefuseAsync(PeerSession session, string why, CancellationToken ct)
     {
         await session.SendAsync(RendezvousWire.Error(why), ct).ConfigureAwait(false);
@@ -786,7 +801,7 @@ public sealed class RendezvousServer(
     private async Task<bool> HandleRelayAsync(PeerSession session, byte[] frame, CancellationToken ct)
     {
         if (frame.Length != 1 + RendezvousTicket.SizeInBytes)
-            return false;
+            return await RefuseAsync(session, Malformed, ct).ConfigureAwait(false);
 
         // Coupé depuis la console : refusé sans compter dans le limiteur et
         // sans couper la session, qui a peut-être des boîtes ouvertes. Le
@@ -925,8 +940,8 @@ public sealed class RendezvousServer(
     /// </remarks>
     private async Task<bool> HandleMailboxClaimAsync(PeerSession session, byte[] frame, CancellationToken ct)
     {
-        if (RendezvousWire.TryReadAddresses(frame, out var addresses, out _) is false
-            || await ReadMailboxRequestAsync(session, frame, ct).ConfigureAwait(false) is null)
+        if (await ReadMailboxRequestAsync(session, frame, ct).ConfigureAwait(false) is null
+            || RendezvousWire.TryReadAddresses(frame, out var addresses, out _) is false)
             return false;
 
         var held = new List<bool>(addresses.Count);
@@ -963,8 +978,11 @@ public sealed class RendezvousServer(
     /// <returns>Les clés distinctes, ou null si la session doit être coupée.</returns>
     private async Task<List<string>?> ReadMailboxRequestAsync(PeerSession session, byte[] frame, CancellationToken ct)
     {
-        if (RendezvousWire.TryReadAddresses(frame, out var addresses, out _) is false)
+        if (RendezvousWire.TryReadAddresses(frame, out var addresses, out var why) is false)
+        {
+            await session.SendAsync(RendezvousWire.Error(why ?? Malformed), ct).ConfigureAwait(false);
             return null;
+        }
 
         if (RateExceeded(session.Bucket, ref _refusedMailboxes))
         {
@@ -1036,7 +1054,7 @@ public sealed class RendezvousServer(
         var payloadLength = frame.Length - 1 - RendezvousWire.MailboxAddressSize;
 
         if (payloadLength is <= 0 or > RendezvousWire.MaxDepositLength)
-            return false;
+            return await RefuseAsync(session, Malformed, ct).ConfigureAwait(false);
 
         if (PresenceRateExceeded(session))
         {
