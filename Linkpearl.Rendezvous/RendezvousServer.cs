@@ -938,7 +938,7 @@ public sealed class RendezvousServer(
             return false;
         }
 
-        if (RateExceeded(session.Bucket, ref _refusedMailboxes))
+        if (PresenceRateExceeded(session))
         {
             await session.SendAsync(RendezvousWire.Error("trop d'interrogations"), ct).ConfigureAwait(false);
             return false;
@@ -975,7 +975,7 @@ public sealed class RendezvousServer(
         if (payloadLength is <= 0 or > RendezvousWire.MaxDepositLength)
             return false;
 
-        if (RateExceeded(session.Bucket, ref _refusedMailboxes))
+        if (PresenceRateExceeded(session))
         {
             await session.SendAsync(RendezvousWire.Error("trop de dépôts"), ct).ConfigureAwait(false);
             return false;
@@ -1012,7 +1012,9 @@ public sealed class RendezvousServer(
     /// Compte une trame pour cette adresse, et dit si elle dépasse le débit.
     /// </summary>
     /// <param name="refused">Le compteur du motif, incrémenté en plus du total.</param>
-    private bool RateExceeded(string bucket, ref long refused)
+    private bool RateExceeded(string bucket, ref long refused) => RateExceeded(bucket, Limits.AnnouncementsPerMinute, ref refused);
+
+    private bool RateExceeded(string bucket, int perMinute, ref long refused)
     {
         var now = clock.UtcNow;
         var entry = _rate.AddOrUpdate(
@@ -1022,13 +1024,33 @@ public sealed class RendezvousServer(
                 ? (1, now)
                 : (existing.Count + 1, existing.Window));
 
-        if (entry.Count <= Limits.AnnouncementsPerMinute)
+        if (entry.Count <= perMinute)
             return false;
 
         Interlocked.Increment(ref _rateRefusals);
         Interlocked.Increment(ref refused);
         return true;
     }
+
+    /// <summary>
+    /// Compte une interrogation ou un dépôt de boîte, par adresse et par /48.
+    /// </summary>
+    /// <remarks>
+    /// Une adresse de boîte dérive d'un nom de personnage : interroger la
+    /// présence, ou déposer et lire « destinataire absent », dit si ce nom
+    /// est en ligne, et rien ne peut l'empêcher sans casser la découverte.
+    /// Le débit est tout ce qui borne l'oracle. Par /64 seulement, un /48
+    /// loué chez un hébergeur en offrait 65 536 fois plus : le /48 a donc
+    /// son propre compte, quatre fois celui d'une adresse, comme ses places
+    /// de connexion.
+    /// </remarks>
+    private bool PresenceRateExceeded(PeerSession session)
+        => RateExceeded(session.Bucket, ref _refusedMailboxes)
+           || (session.WideBucket is { } wide
+               && RateExceeded($"large:{wide}", Limits.AnnouncementsPerMinute * PrefixRateFactor, ref _refusedMailboxes));
+
+    /// <summary>Ce qu'un /48 IPv6 peut interroger, en multiple du débit d'une adresse.</summary>
+    public const int PrefixRateFactor = 4;
 
     private void Forget(PeerSession session)
     {
