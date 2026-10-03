@@ -171,12 +171,14 @@ l'extérieur, mettre un proxy inverse avec TLS sur la même machine, pas `--admi
 sans TLS, le jeton voyagerait en clair. Gérer des certificats ici reviendrait à refaire moins
 bien ce qu'un proxy fait déjà.
 
-Le port est ouvert sur toutes les interfaces et c'est le service qui refuse, par un 403, tout
-ce qui n'arrive pas de la boucle locale. Ce n'est pas le réglage qu'on aimerait écrire : un
-préfixe `HttpListener` lié à `127.0.0.1` n'apparie que les requêtes dont l'en-tête `Host` vaut
-littéralement `127.0.0.1`, et rendait donc 404 à tout proxy inverse, qui passe le nom public,
-et même à `localhost`. Or être derrière un proxy est le déploiement prévu. Un pare-feu sur le
-port de la console reste utile à qui veut la ceinture et les bretelles.
+En accès local, le port n'écoute que sur la boucle locale (`127.0.0.1`, et l'adresse que
+résout `localhost`), et le service refuse encore par un 403 tout ce qui n'en vient pas. Le
+prix : `HttpListener` apparie ses préfixes sur l'en-tête `Host`, donc la console ne répond
+qu'aux hôtes `127.0.0.1:47901` et `localhost:47901`, et rend 404 à tout autre. Un proxy inverse
+doit transmettre cet hôte et non le nom public : nginx le fait de lui-même avec
+`proxy_pass http://127.0.0.1:47901;` (sans `proxy_set_header Host $host`), Caddy avec
+`header_up Host {upstream_hostport}`. `::1` ne s'écrit pas dans un préfixe `HttpListener`,
+d'où `localhost`. Avec `--admin-allow any`, le port reste ouvert sur toutes les interfaces.
 
 Aucun nom de personnage n'apparaît nulle part sur cette page, et ce n'est pas une précaution
 d'affichage : le service n'en connaît aucun.

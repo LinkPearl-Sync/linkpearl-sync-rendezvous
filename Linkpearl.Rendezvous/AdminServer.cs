@@ -21,12 +21,20 @@ namespace Linkpearl.Rendezvous;
 /// suffit pour sept cents lignes de service, là où le cadre ajouterait une pile
 /// entière et des dizaines de mégaoctets au binaire autonome.
 ///
-/// Le préfixe est sur « + », donc le port est ouvert sur toutes les interfaces,
-/// et c'est <see cref="Serves"/> qui refuse ce qui ne vient pas de la machine.
-/// Un préfixe lié à 127.0.0.1 semblerait plus sûr, mais HttpListener apparie ses
-/// préfixes sur l'en-tête Host : il rendait alors 404 à tout proxy inverse, qui
-/// passe le nom public, et même à « localhost ». Or être derrière un proxy est
-/// précisément le déploiement prévu.
+/// En accès local, le port n'écoute que sur la boucle locale : 127.0.0.1, et
+/// l'adresse que résout « localhost ». Le port était ouvert sur toutes les
+/// interfaces, et seul <see cref="Serves"/> refusait le reste : une faute dans
+/// ce contrôle, ou dans l'analyse HTTP qui le précède, se jouait alors depuis
+/// Internet. <see cref="Serves"/> reste, en seconde ligne.
+///
+/// Le prix : HttpListener apparie ses préfixes sur l'en-tête Host, donc la
+/// console ne répond qu'aux requêtes dont l'hôte est « 127.0.0.1:port » ou
+/// « localhost:port ». Un proxy inverse doit transmettre cet hôte et non le
+/// nom public : nginx le fait de lui-même avec « proxy_pass
+/// http://127.0.0.1:47901 », Caddy avec « header_up Host {upstream_hostport} ».
+/// L'adresse ::1 ne s'écrit pas dans un préfixe (l'analyseur de HttpListener
+/// y lit un port), d'où « localhost ». Avec <c>--admin-allow any</c>, le
+/// préfixe reste « + », sur toutes les interfaces.
 /// </remarks>
 public sealed class AdminServer(
     bool localOnly, int adminPort, int servicePort, string token,
@@ -59,15 +67,12 @@ public sealed class AdminServer(
 
     public async Task RunAsync(CancellationToken ct)
     {
-        using var listener = new HttpListener();
-
-        listener.Prefixes.Add($"http://+:{adminPort}/");
-        listener.Start();
+        using var listener = Listen();
 
         Console.WriteLine($"Console d'administration sur http://127.0.0.1:{adminPort}/");
 
         Console.WriteLine(localOnly
-            ? "  Le port est ouvert sur toutes les interfaces, mais seule la machine locale est servie."
+            ? "  Le port n'écoute que sur la boucle locale."
             : "  Attention : elle répond à tout le monde, et le jeton voyage en clair. Mettre un proxy avec TLS devant.");
 
         using var stop = ct.Register(listener.Close);
@@ -88,6 +93,37 @@ public sealed class AdminServer(
             // Servie en dehors de la boucle d'acceptation : une requête lente ne
             // doit pas empêcher la suivante d'être prise.
             _ = Task.Run(() => HandleSafelyAsync(context), ct);
+        }
+    }
+
+    /// <summary>Ouvre l'écoute : la boucle locale seule, ou toutes les interfaces.</summary>
+    /// <remarks>
+    /// « localhost » peut résoudre vers ::1 sur une machine dont l'IPv6 est
+    /// coupée, et l'écoute échoue alors : on se replie sur 127.0.0.1 seul
+    /// plutôt que de laisser tomber la console, donc le service avec elle.
+    /// </remarks>
+    private HttpListener Listen()
+    {
+        string[][] attempts = localOnly
+            ? [[$"http://127.0.0.1:{adminPort}/", $"http://localhost:{adminPort}/"], [$"http://127.0.0.1:{adminPort}/"]]
+            : [[$"http://+:{adminPort}/"]];
+
+        for (var i = 0; ; i++)
+        {
+            var listener = new HttpListener();
+
+            foreach (var prefix in attempts[i])
+                listener.Prefixes.Add(prefix);
+
+            try
+            {
+                listener.Start();
+                return listener;
+            }
+            catch (HttpListenerException) when (i < attempts.Length - 1)
+            {
+                listener.Close();
+            }
         }
     }
 

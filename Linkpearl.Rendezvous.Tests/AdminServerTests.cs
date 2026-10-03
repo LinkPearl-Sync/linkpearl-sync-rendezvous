@@ -568,12 +568,14 @@ public sealed class AdminServerTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Un_proxy_inverse_qui_passe_son_propre_nom_est_servi()
+    public async Task En_acces_local_la_console_sert_les_hotes_de_boucle_locale()
     {
-        // Le déploiement prévu est derrière un proxy, qui passe le nom public.
-        // Lié à 127.0.0.1, HttpListener apparie ses préfixes sur l'en-tête Host
-        // et rendait 404 à tout proxy, et même à « localhost ».
-        foreach (var host in new[] { "linkpearl.exemple.ch", "localhost", "127.0.0.1" })
+        // Liée à la boucle locale, HttpListener apparie ses préfixes sur
+        // l'en-tête Host : un proxy inverse doit passer 127.0.0.1:port ou
+        // localhost:port, ce que nginx fait de lui-même.
+        var port = new Uri(_root).Port;
+
+        foreach (var host in new[] { $"localhost:{port}", $"127.0.0.1:{port}" })
         {
             var request = new HttpRequestMessage(HttpMethod.Get, $"{_root}/api/bans");
             request.Headers.Host = host;
@@ -582,6 +584,21 @@ public sealed class AdminServerTests : IAsyncLifetime
 
             Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         }
+    }
+
+    [Fact]
+    public void En_acces_local_le_port_nest_pas_ouvert_hors_de_la_boucle_locale()
+    {
+        // Le port était ouvert sur toutes les interfaces, et seul le contrôle
+        // d'adresse refusait le reste.
+        var port = new Uri(_root).Port;
+        var listening = System.Net.NetworkInformation.IPGlobalProperties.GetIPGlobalProperties()
+            .GetActiveTcpListeners()
+            .Where(endpoint => endpoint.Port == port)
+            .ToList();
+
+        Assert.NotEmpty(listening);
+        Assert.All(listening, endpoint => Assert.True(IPAddress.IsLoopback(endpoint.Address), endpoint.ToString()));
     }
 
     [Fact]

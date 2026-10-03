@@ -87,7 +87,8 @@ if (args.Contains("--help"))
                       l'y laisser : elle est en HTTP clair, donc le jeton
                       voyagerait en clair. Pour l'ouvrir, un proxy inverse avec
                       TLS sur la même machine, pas --admin-allow any.
-                      Un proxy local passe, quel que soit le nom qu'il présente.
+                      En local, le port n'écoute que sur 127.0.0.1 et localhost :
+                      un proxy doit passer l'hôte 127.0.0.1:PORT, pas son nom.
         --no-admin    n'ouvre pas de console du tout.
         --admin-token fichier du jeton. Engendré au premier démarrage, à lire
                       dans le fichier : admin.token par défaut.
