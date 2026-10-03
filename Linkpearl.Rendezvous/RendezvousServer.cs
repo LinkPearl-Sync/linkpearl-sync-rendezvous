@@ -129,7 +129,7 @@ public sealed class RendezvousServer(
         return new(
             mailboxes, _waiting.Count, _relayWaiting.Count, Volatile.Read(ref _activeRelays),
             Interlocked.Read(ref _matched), Interlocked.Read(ref _relayed), PeerSession.TotalRelayedBytes,
-            Volatile.Read(ref _connections), refusedConnections,
+            _slots.Total, refusedConnections,
             Interlocked.Read(ref _rateRefusals), _rate.Count,
             directory.Known().Count, directory.Pending().Count,
             new Refusals(
@@ -144,9 +144,12 @@ public sealed class RendezvousServer(
     private long _refusedRelays;
     private long _refusedSubmissions;
 
-    private int _connections;
     private int _activeRelays;
     private long _refusedConnections;
+    private long _idleClosed;
+
+    /// <summary>Sessions fermées pour inactivité depuis le démarrage.</summary>
+    public long IdleClosed => Interlocked.Read(ref _idleClosed);
 
     /// <summary>Vingt-quatre heures de trafic, en mémoire seulement.</summary>
     public History History { get; } = new();
@@ -167,8 +170,11 @@ public sealed class RendezvousServer(
     /// </remarks>
     public bool Healthy => AcceptLoop.Alive && ReflectLoop.Alive;
 
-    /// <summary>Connexions tenues par seau d'adresses, pour le plafond par adresse.</summary>
-    private readonly ConcurrentDictionary<string, int> _connectionsPerBucket = new(StringComparer.Ordinal);
+    /// <summary>Les places de connexion, au total, par adresse et par /48.</summary>
+    private readonly ConnectionSlots _slots = new();
+
+    /// <summary>Les sessions vivantes, que le balayage passe en revue pour l'inactivité.</summary>
+    private readonly ConcurrentDictionary<PeerSession, byte> _sessions = new(ReferenceEqualityComparer.Instance);
 
     private sealed class Waiting
     {
@@ -367,50 +373,19 @@ public sealed class RendezvousServer(
         var limits = Limits;
         var session = new PeerSession(client) { SendTimeout = limits.PeerSendTimeout, RelayStallTimeout = limits.RelayStallTimeout };
 
-        if (TryReserve(session.Bucket) is false)
+        if (_slots.TryReserve(session.Bucket, session.WideBucket, limits) is false)
         {
             Interlocked.Increment(ref _refusedConnections);
             session.Dispose();
             return;
         }
 
+        session.Touch(clock.UtcNow);
+        _sessions[session] = 0;
+
         // Appelée et non confiée à Task.Run : une tâche annulée avant d'avoir
         // démarré ne libérerait ni la place ni la socket.
         _ = ServeAsync(session, ct);
-    }
-
-    private bool TryReserve(string bucket)
-    {
-        var limits = Limits;
-
-        if (Interlocked.Increment(ref _connections) > limits.MaxConnections)
-        {
-            Interlocked.Decrement(ref _connections);
-            return false;
-        }
-
-        if (_connectionsPerBucket.AddOrUpdate(bucket, 1, (_, held) => held + 1) > limits.MaxConnectionsPerAddress)
-        {
-            Release(bucket);
-            return false;
-        }
-
-        return true;
-    }
-
-    private void Release(string bucket)
-    {
-        Interlocked.Decrement(ref _connections);
-
-        // L'entrée disparaît à zéro : sans cela, le dictionnaire garderait une
-        // trace de chaque adresse jamais vue.
-        while (_connectionsPerBucket.TryGetValue(bucket, out var held))
-        {
-            if (held <= 1
-                ? _connectionsPerBucket.TryRemove(new KeyValuePair<string, int>(bucket, held))
-                : _connectionsPerBucket.TryUpdate(bucket, held - 1, held))
-                return;
-        }
     }
 
     private async Task ServeAsync(PeerSession session, CancellationToken ct)
@@ -429,7 +404,9 @@ public sealed class RendezvousServer(
                 {
                     // La première trame a un délai, les suivantes n'en ont pas :
                     // une boîte reste ouverte des heures sans rien dire, et
-                    // c'est le keepalive qui constate sa mort.
+                    // c'est le keepalive qui constate sa mort. Une session
+                    // qui ne tient plus rien, elle, est fermée par le balayage
+                    // au bout de IdleTimeout.
                     using var patience = CancellationTokenSource.CreateLinkedTokenSource(ct);
                     patience.CancelAfter(Limits.FirstFrameTimeout);
 
@@ -451,6 +428,8 @@ public sealed class RendezvousServer(
 
                 if (frame is null)
                     return;
+
+                session.Touch(clock.UtcNow);
 
                 var handled = frame[0] switch
                 {
@@ -505,7 +484,8 @@ public sealed class RendezvousServer(
         finally
         {
             Forget(session);
-            Release(session.Bucket);
+            _sessions.TryRemove(session, out _);
+            _slots.Release(session.Bucket, session.WideBucket);
             session.Dispose();
         }
     }
@@ -1109,6 +1089,22 @@ public sealed class RendezvousServer(
             {
                 relay.Session.ForgetKey(key);
                 _ = AbandonRelayAsync(relay.Session);
+            }
+        }
+
+        // Une session qui ne tient ni boîte, ni attente, ni relais n'a plus de
+        // raison d'occuper une place : seule la première trame avait un
+        // délai, et un acteur qui parlait une fois puis se taisait gardait sa
+        // place pour toujours. Ce qu'elle tient la protège, parce que c'est
+        // son silence qui est normal : une boîte écoute des heures sans rien
+        // dire.
+        foreach (var session in _sessions.Keys)
+        {
+            if (session.MailboxCount is 0 && session.KeyCount is 0 && session.IsRelaying is false
+                && now - session.LastActivity > limits.IdleTimeout)
+            {
+                Interlocked.Increment(ref _idleClosed);
+                session.Abort();
             }
         }
 

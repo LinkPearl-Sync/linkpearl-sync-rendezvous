@@ -37,6 +37,16 @@ public sealed class PeerSession(TcpClient client) : IDisposable
     /// <summary>La clé sous laquelle le limiteur compte cette connexion.</summary>
     public string Bucket { get; } = AddressBucket.Of(RemoteOf(client));
 
+    /// <summary>Le /48 sous lequel cette connexion compte aussi, en IPv6 ; nul en IPv4.</summary>
+    public string? WideBucket { get; } = AddressBucket.Wide(RemoteOf(client));
+
+    private long _lastActivity;
+
+    /// <summary>La dernière trame reçue, à l'heure de l'horloge du service.</summary>
+    public DateTimeOffset LastActivity => new(Interlocked.Read(ref _lastActivity), TimeSpan.Zero);
+
+    public void Touch(DateTimeOffset now) => Interlocked.Exchange(ref _lastActivity, now.UtcTicks);
+
     /// <summary>Les jetons sur lesquels cette session attend, annonce ou relais.</summary>
     public ICollection<string> Keys => _keys.Keys;
 

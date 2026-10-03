@@ -359,6 +359,7 @@ public static class AdminPage
                 <label>Annonces par minute et par adresse <input name="announcementsPerMinute" type="number" required></label>
                 <label>Connexions, toutes adresses <input name="maxConnections" type="number" required></label>
                 <label>Connexions par adresse <input name="maxConnectionsPerAddress" type="number" required></label>
+                <label>Connexions par /48 IPv6 <input name="maxConnectionsPerPrefix" type="number" required></label>
                 <label>Boîtes par connexion <input name="maxMailboxesPerSession" type="number" required></label>
                 <label>Jetons en attente par connexion <input name="maxWaitingKeysPerSession" type="number" required></label>
                 <label class="interrupteur"><input name="relayEnabled" type="checkbox"> Relais actif</label>

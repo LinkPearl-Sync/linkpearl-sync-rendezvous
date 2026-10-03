@@ -38,6 +38,7 @@ public sealed class SettingsStore(string path)
         new("announcementsPerMinute", 1, 100_000),
         new("maxConnections", 1, 1_000_000),
         new("maxConnectionsPerAddress", 1, 100_000),
+        new("maxConnectionsPerPrefix", 1, 1_000_000),
         new("maxMailboxesPerSession", 1, 1_024),
         new("maxWaitingKeysPerSession", 1, 4_096),
     ];
@@ -154,6 +155,7 @@ public sealed class SettingsStore(string path)
                 "announcementsPerMinute" => applied with { AnnouncementsPerMinute = (int)node!.GetValue<long>() },
                 "maxConnections" => applied with { MaxConnections = (int)node!.GetValue<long>() },
                 "maxConnectionsPerAddress" => applied with { MaxConnectionsPerAddress = (int)node!.GetValue<long>() },
+                "maxConnectionsPerPrefix" => applied with { MaxConnectionsPerPrefix = (int)node!.GetValue<long>() },
                 "maxMailboxesPerSession" => applied with { MaxMailboxesPerSession = (int)node!.GetValue<long>() },
                 "maxWaitingKeysPerSession" => applied with { MaxWaitingKeysPerSession = (int)node!.GetValue<long>() },
                 RelayEnabledName => applied with { RelayEnabled = node!.GetValue<bool>() },
@@ -172,6 +174,7 @@ public sealed class SettingsStore(string path)
             ["announcementsPerMinute"] = limits.AnnouncementsPerMinute,
             ["maxConnections"] = limits.MaxConnections,
             ["maxConnectionsPerAddress"] = limits.MaxConnectionsPerAddress,
+            ["maxConnectionsPerPrefix"] = limits.MaxConnectionsPerPrefix,
             ["maxMailboxesPerSession"] = limits.MaxMailboxesPerSession,
             ["maxWaitingKeysPerSession"] = limits.MaxWaitingKeysPerSession,
             [RelayEnabledName] = limits.RelayEnabled,

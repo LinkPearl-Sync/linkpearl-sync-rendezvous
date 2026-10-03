@@ -37,4 +37,23 @@ public sealed class AddressBucketTests
             AddressBucket.Of(IPAddress.Parse("198.51.100.7")),
             AddressBucket.Of(IPAddress.Parse("::ffff:198.51.100.7")));
     }
+
+    [Fact]
+    public void En_ipv6_le_prefixe_large_est_le_48()
+    {
+        Assert.Equal(
+            AddressBucket.Wide(IPAddress.Parse("2001:db8:1:2::1")),
+            AddressBucket.Wide(IPAddress.Parse("2001:db8:1:ffff::1")));
+
+        Assert.NotEqual(
+            AddressBucket.Wide(IPAddress.Parse("2001:db8:1::1")),
+            AddressBucket.Wide(IPAddress.Parse("2001:db8:2::1")));
+    }
+
+    [Fact]
+    public void En_ipv4_il_ny_a_pas_de_prefixe_large()
+    {
+        Assert.Null(AddressBucket.Wide(IPAddress.Parse("198.51.100.7")));
+        Assert.Null(AddressBucket.Wide(IPAddress.Parse("::ffff:198.51.100.7")));
+    }
 }

@@ -24,11 +24,42 @@ public sealed record RendezvousLimits
     /// <summary>Trames comptées par minute et par adresse, au-delà desquelles on refuse.</summary>
     public int AnnouncementsPerMinute { get; init; } = 60;
 
-    /// <summary>Connexions TCP tenues en même temps, toutes adresses confondues.</summary>
-    public int MaxConnections { get; init; } = 2048;
+    /// <summary>
+    /// Connexions TCP tenues en même temps, toutes adresses confondues.
+    /// </summary>
+    /// <remarks>
+    /// L'unité systemd donne LimitNOFILE=65536 : la moitié laisse au
+    /// processus de quoi ouvrir ses fichiers, la console et ses sondes même
+    /// plein. Un joueur tient d'ordinaire deux à cinq connexions et jusqu'à
+    /// vingt et une en pointe, donc 32 768 places servent de 1 500 joueurs
+    /// tous en pointe à plus de 6 000 en régime courant. L'ancien plafond,
+    /// 2 048, s'occupait entier depuis 64 adresses.
+    /// </remarks>
+    public int MaxConnections { get; init; } = 32_768;
 
     /// <summary>Connexions TCP tenues en même temps depuis une même adresse (un /64 en IPv6).</summary>
     public int MaxConnectionsPerAddress { get; init; } = 32;
+
+    /// <summary>
+    /// Connexions TCP tenues en même temps depuis un même /48 IPv6.
+    /// </summary>
+    /// <remarks>
+    /// Quatre seaux ordinaires pleins : de quoi servir une petite structure
+    /// ou plusieurs foyers d'un même opérateur, sans qu'un /48 loué chez un
+    /// hébergeur, qui porte 65 536 /64, ne prenne le service entier.
+    /// </remarks>
+    public int MaxConnectionsPerPrefix { get; init; } = 128;
+
+    /// <summary>
+    /// Délai au bout duquel une session qui ne tient rien est fermée.
+    /// </summary>
+    /// <remarks>
+    /// Sans boîte, sans attente ni relais, une connexion n'attend plus que de
+    /// poser sa prochaine question. Le plugin ne la garde pas plus de
+    /// vingt-cinq secondes après son appariement : une minute ne coupe
+    /// personne de légitime, et rend la place à qui en a besoin.
+    /// </remarks>
+    public TimeSpan IdleTimeout { get; init; } = TimeSpan.FromSeconds(60);
 
     /// <summary>
     /// Délai accordé à une connexion pour dire sa première trame.
