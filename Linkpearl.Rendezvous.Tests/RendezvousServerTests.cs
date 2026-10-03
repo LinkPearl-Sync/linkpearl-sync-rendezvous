@@ -277,63 +277,21 @@ public sealed class LimiterTests
     }
 
     [Fact]
-    public async Task Les_invitations_sont_plafonnees_par_adresse()
+    public async Task Les_trames_de_ticket_sont_inattendues()
     {
-        await using var harness = await ServerHarness.StartAsync(new RendezvousLimits { MaxInvitationsPerAddress = 2 });
+        // Le plugin ne dépose plus d'invitation : le service les traite comme
+        // toute trame inconnue, une erreur puis la fermeture.
+        await using var harness = await ServerHarness.StartAsync();
 
-        var client = await harness.ConnectAsync();
+        var register = await harness.ConnectAsync();
+        await register.SendAsync(RendezvousWire.TicketRegister(Invitation(1), [1]));
+        await AssertErrorAsync(register, "trame inattendue");
+        Assert.True(await register.IsClosedAsync(TimeSpan.FromSeconds(5)));
 
-        for (byte seed = 1; seed <= 2; seed++)
-        {
-            await client.SendAsync(RendezvousWire.TicketRegister(Invitation(seed), [seed]));
-            Assert.Equal(RendezvousKind.TicketAccepted, (await client.ReadFrameAsync())![0]);
-        }
-
-        await client.SendAsync(RendezvousWire.TicketRegister(Invitation(3), [3]));
-        await AssertErrorAsync(client, "trop d'invitations");
-
-        // La connexion tient : un refus de dépôt n'est pas une faute de protocole.
-        await client.SendAsync(RendezvousWire.TicketRedeem(Invitation(1)));
-        Assert.Equal(RendezvousKind.TicketPayload, (await client.ReadFrameAsync())![0]);
-
-        // Et la place retirée se reprend.
-        await client.SendAsync(RendezvousWire.TicketRegister(Invitation(3), [3]));
-        Assert.Equal(RendezvousKind.TicketAccepted, (await client.ReadFrameAsync())![0]);
-    }
-
-    [Fact]
-    public async Task Les_invitations_sont_plafonnees_au_total()
-    {
-        await using var harness = await ServerHarness.StartAsync(new RendezvousLimits { MaxInvitations = 1 });
-
-        var client = await harness.ConnectAsync();
-        await client.SendAsync(RendezvousWire.TicketRegister(Invitation(1), [1]));
-        Assert.Equal(RendezvousKind.TicketAccepted, (await client.ReadFrameAsync())![0]);
-
-        // Redéposer le même ticket remplace, sans compter double.
-        await client.SendAsync(RendezvousWire.TicketRegister(Invitation(1), [9]));
-        Assert.Equal(RendezvousKind.TicketAccepted, (await client.ReadFrameAsync())![0]);
-
-        await client.SendAsync(RendezvousWire.TicketRegister(Invitation(2), [2]));
-        await AssertErrorAsync(client, "trop d'invitations");
-        Assert.Equal(1, harness.Server.Snapshot().PendingInvitations);
-    }
-
-    [Fact]
-    public async Task Une_invitation_expiree_libere_sa_place()
-    {
-        await using var harness = await ServerHarness.StartAsync(new RendezvousLimits { MaxInvitations = 1 });
-
-        var client = await harness.ConnectAsync();
-        await client.SendAsync(RendezvousWire.TicketRegister(Invitation(1), [1]));
-        Assert.Equal(RendezvousKind.TicketAccepted, (await client.ReadFrameAsync())![0]);
-
-        harness.Clock.Advance(TimeSpan.FromHours(25));
-        harness.Server.Sweep();
-        Assert.Equal(0, harness.Server.Snapshot().PendingInvitations);
-
-        await client.SendAsync(RendezvousWire.TicketRegister(Invitation(2), [2]));
-        Assert.Equal(RendezvousKind.TicketAccepted, (await client.ReadFrameAsync())![0]);
+        var redeem = await harness.ConnectAsync();
+        await redeem.SendAsync(RendezvousWire.TicketRedeem(Invitation(1)));
+        await AssertErrorAsync(redeem, "trame inattendue");
+        Assert.True(await redeem.IsClosedAsync(TimeSpan.FromSeconds(5)));
     }
 
     [Fact]
@@ -552,12 +510,10 @@ public sealed class LogTests
 
     private static byte[] Box(byte seed) => Enumerable.Repeat(seed, RendezvousWire.MailboxAddressSize).ToArray();
 
-    private static byte[] Invitation(byte seed) => Enumerable.Repeat(seed, RendezvousWire.InvitationTicketSize).ToArray();
-
     private static byte[] Announce(byte[] sealedCandidates, params byte[][] tickets)
         => RendezvousWire.Announce(new Announcement(tickets, sealedCandidates));
 
-    /// <summary>Fait passer un appariement, un dépôt d'invitation, une boîte et une remise.</summary>
+    /// <summary>Fait passer un appariement, une boîte et une remise.</summary>
     private static async Task ExerciseAsync(ServerHarness harness)
     {
         var a = await harness.ConnectAsync();
@@ -567,11 +523,6 @@ public sealed class LogTests
         await b.SendAsync(Announce([2], Ticket(0x11)));
         Assert.Equal(RendezvousKind.Matched, (await a.ReadFrameAsync())![0]);
         Assert.Equal(RendezvousKind.Matched, (await b.ReadFrameAsync())![0]);
-
-        await a.SendAsync(RendezvousWire.TicketRegister(Invitation(0x0a), [1]));
-        Assert.Equal(RendezvousKind.TicketAccepted, (await a.ReadFrameAsync())![0]);
-        await b.SendAsync(RendezvousWire.TicketRedeem(Invitation(0x0a)));
-        Assert.Equal(RendezvousKind.TicketPayload, (await b.ReadFrameAsync())![0]);
 
         await a.SendAsync(RendezvousWire.MailboxOpen([Box(0x0b)]));
 
@@ -595,15 +546,14 @@ public sealed class LogTests
         var log = harness.Log;
 
         Assert.Contains("appari", log);
-        Assert.Contains("invitation", log);
+        Assert.Contains("demande remise", log);
         Assert.DoesNotContain("127.0.0.1", log);
         Assert.DoesNotContain("1111", log);
-        Assert.DoesNotContain("0a0a", log);
         Assert.DoesNotContain("0b0b", log);
     }
 
     [Fact]
-    public async Task En_mode_verbeux_les_adresses_apparaissent_mais_jamais_le_ticket_dinvitation()
+    public async Task En_mode_verbeux_les_adresses_et_les_fragments_apparaissent()
     {
         await using var harness = await ServerHarness.StartAsync(verbose: true);
 
@@ -613,7 +563,6 @@ public sealed class LogTests
 
         Assert.Contains("127.0.0.1", log);
         Assert.Contains("1111", log);
-        Assert.DoesNotContain("0a0a", log);
     }
 }
 
@@ -660,7 +609,7 @@ public sealed class HealthTests
     public async Task Les_refus_sont_ventiles_par_motif()
     {
         // Un total seul ne dit pas quoi faire : un client qui ouvre des boîtes
-        // en boucle et quelqu'un qui parcourt les tickets d'invitation
+        // en boucle et un service qui se porte candidat en boucle
         // n'appellent pas la même réponse.
         await using var harness = await ServerHarness.StartAsync(new RendezvousLimits { AnnouncementsPerMinute = 1 });
 
@@ -676,7 +625,7 @@ public sealed class HealthTests
         Assert.Equal(1, refusals.Mailbox);
         Assert.Equal(0, refusals.Announce);
         Assert.Equal(0, refusals.Relay);
-        Assert.Equal(0, refusals.Invitation);
+        Assert.Equal(0, refusals.Directory);
         Assert.Equal(1, harness.Server.Snapshot().RateRefusals);
     }
 }

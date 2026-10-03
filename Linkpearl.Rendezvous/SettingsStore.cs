@@ -40,9 +40,18 @@ public sealed class SettingsStore(string path)
         new("maxConnectionsPerAddress", 1, 100_000),
         new("maxMailboxesPerSession", 1, 1_024),
         new("maxWaitingKeysPerSession", 1, 4_096),
-        new("maxInvitations", 1, 10_000_000),
-        new("maxInvitationsPerAddress", 1, 100_000),
     ];
+
+    /// <summary>
+    /// Réglages d'une version précédente, ignorés à la lecture.
+    /// </summary>
+    /// <remarks>
+    /// La console écrit tous les réglages d'un bloc, donc un settings.json
+    /// d'avant porte encore les plafonds d'invitations. Les refuser comme
+    /// inconnus ferait ignorer tout le fichier au premier démarrage de la
+    /// nouvelle version, et l'opérateur perdrait ses réglages sans le voir.
+    /// </remarks>
+    private static readonly HashSet<string> Retired = ["maxInvitations", "maxInvitationsPerAddress"];
 
     public const string RelayEnabledName = "relayEnabled";
 
@@ -114,6 +123,9 @@ public sealed class SettingsStore(string path)
                 continue;
             }
 
+            if (Retired.Contains(name))
+                continue;
+
             var bound = Bounds.FirstOrDefault(b => b.Name == name);
 
             if (bound is null)
@@ -144,8 +156,6 @@ public sealed class SettingsStore(string path)
                 "maxConnectionsPerAddress" => applied with { MaxConnectionsPerAddress = (int)node!.GetValue<long>() },
                 "maxMailboxesPerSession" => applied with { MaxMailboxesPerSession = (int)node!.GetValue<long>() },
                 "maxWaitingKeysPerSession" => applied with { MaxWaitingKeysPerSession = (int)node!.GetValue<long>() },
-                "maxInvitations" => applied with { MaxInvitations = (int)node!.GetValue<long>() },
-                "maxInvitationsPerAddress" => applied with { MaxInvitationsPerAddress = (int)node!.GetValue<long>() },
                 RelayEnabledName => applied with { RelayEnabled = node!.GetValue<bool>() },
                 _ => applied,
             };
@@ -164,8 +174,6 @@ public sealed class SettingsStore(string path)
             ["maxConnectionsPerAddress"] = limits.MaxConnectionsPerAddress,
             ["maxMailboxesPerSession"] = limits.MaxMailboxesPerSession,
             ["maxWaitingKeysPerSession"] = limits.MaxWaitingKeysPerSession,
-            ["maxInvitations"] = limits.MaxInvitations,
-            ["maxInvitationsPerAddress"] = limits.MaxInvitationsPerAddress,
             [RelayEnabledName] = limits.RelayEnabled,
         };
 

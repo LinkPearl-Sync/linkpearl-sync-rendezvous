@@ -189,7 +189,7 @@ public static class AdminPage
           <div class="chiffres">
             <div class="carte"><b id="connexions">0</b><span>connexions tenues</span></div>
             <div class="carte"><b id="relaisActifs">0</b><span>relais en cours</span></div>
-            <div class="carte"><b id="invitations">0</b><span>invitations en attente</span></div>
+            <div class="carte"><b id="relaisAttente">0</b><span>relais en attente d'un pair</span></div>
             <div class="carte"><b id="memoire">0</b><span>ensemble de travail, <span id="tas">0</span> de tas géré</span></div>
           </div>
           <div class="panneau boucles" style="margin-top:.8rem">
@@ -211,7 +211,7 @@ public static class AdminPage
             <div class="carte"><b id="refusAnnonce">0</b><span>annonces refusées</span></div>
             <div class="carte"><b id="refusBoite">0</b><span>boîtes refusées</span></div>
             <div class="carte"><b id="refusRelais">0</b><span>relais refusés</span></div>
-            <div class="carte"><b id="refusInvitation">0</b><span>invitations refusées</span></div>
+            <div class="carte"><b id="refusCandidature">0</b><span>candidatures refusées</span></div>
             <div class="carte"><b id="refusConnexion">0</b><span>connexions refusées</span></div>
           </div>
           <h2>
@@ -361,8 +361,6 @@ public static class AdminPage
                 <label>Connexions par adresse <input name="maxConnectionsPerAddress" type="number" required></label>
                 <label>Boîtes par connexion <input name="maxMailboxesPerSession" type="number" required></label>
                 <label>Jetons en attente par connexion <input name="maxWaitingKeysPerSession" type="number" required></label>
-                <label>Invitations en attente, au total <input name="maxInvitations" type="number" required></label>
-                <label>Invitations en attente par adresse <input name="maxInvitationsPerAddress" type="number" required></label>
                 <label class="interrupteur"><input name="relayEnabled" type="checkbox"> Relais actif</label>
                 <span class="actions-liste" style="align-self:end">
                   <button type="button" onclick="chargerReglages()">Recharger</button>
@@ -589,7 +587,7 @@ public static class AdminPage
 
           $("connexions").textContent = c.connections;
           $("relaisActifs").textContent = c.activeRelays;
-          $("invitations").textContent = c.pendingInvitations;
+          $("relaisAttente").textContent = c.relayWaiting;
           grandeur($("memoire"), s.memory.workingSetBytes);
           $("tas").textContent = octets(s.memory.gcHeapBytes).join(" ");
 
@@ -600,7 +598,7 @@ public static class AdminPage
 
           const r = s.refusals;
           for (const [id, n] of [["refusAnnonce", r.announce], ["refusBoite", r.mailbox], ["refusRelais", r.relay],
-                                 ["refusInvitation", r.invitation], ["refusConnexion", r.connection]]) {
+                                 ["refusCandidature", r.directory], ["refusConnexion", r.connection]]) {
             $(id).textContent = n;
             $(id).classList.toggle("non-nul", n > 0);
           }

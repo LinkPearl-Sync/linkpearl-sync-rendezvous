@@ -250,7 +250,7 @@ public sealed class AdminServerTests : IAsyncLifetime
     {
         var state = JsonNode.Parse(await (await SendAsync(HttpMethod.Get, "/api/status")).Content.ReadAsStringAsync())!;
 
-        foreach (var reason in new[] { "announce", "mailbox", "relay", "invitation", "connection" })
+        foreach (var reason in new[] { "announce", "mailbox", "relay", "directory", "connection" })
             Assert.Equal(0, state["refusals"]![reason]!.GetValue<long>());
     }
 

@@ -45,6 +45,18 @@ public sealed class SettingsStoreTests : IDisposable
     }
 
     [Fact]
+    public void Les_plafonds_dinvitations_dune_version_precedente_sont_ignores()
+    {
+        // La console écrivait tous les réglages, ceux des invitations compris :
+        // les refuser comme inconnus ferait perdre tout le fichier.
+        File.WriteAllText(Path_, """{ "announcementsPerMinute": 90, "maxInvitations": 10000, "maxInvitationsPerAddress": 32 }""");
+
+        var loaded = new SettingsStore(Path_).Load(RendezvousLimits.Default, TextWriter.Null);
+
+        Assert.Equal(90, loaded.AnnouncementsPerMinute);
+    }
+
+    [Fact]
     public void Un_fichier_illisible_est_ignore_et_dit_sans_etre_reecrit()
     {
         File.WriteAllText(Path_, "{ pas du json");

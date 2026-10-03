@@ -54,12 +54,6 @@ public sealed record RendezvousLimits
     /// <summary>Jetons sur lesquels une même connexion peut attendre un pair.</summary>
     public int MaxWaitingKeysPerSession { get; init; } = 64;
 
-    /// <summary>Invitations déposées et non encore retirées, toutes adresses confondues.</summary>
-    public int MaxInvitations { get; init; } = 10_000;
-
-    /// <summary>Invitations déposées et non encore retirées depuis une même adresse.</summary>
-    public int MaxInvitationsPerAddress { get; init; } = 32;
-
     /// <summary>
     /// Si le service accepte de relayer.
     /// </summary>

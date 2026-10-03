@@ -27,8 +27,8 @@ namespace Linkpearl.Rendezvous;
 /// personnage, ni manifeste, ni fichier. Un observateur ne peut pas relier deux
 /// fenêtres entre elles.
 ///
-/// Rien de ce qu'il fait n'est persisté : jetons, attentes, boîtes et
-/// invitations vivent en mémoire et disparaissent avec le processus. Ce que
+/// Rien de ce qu'il fait n'est persisté : jetons, attentes et boîtes vivent
+/// en mémoire et disparaissent avec le processus. Ce que
 /// l'opérateur configure vit sur le disque, à côté : l'annuaire
 /// (<see cref="PeerDirectory"/>), la liste de bannissement
 /// (<see cref="BanStore"/>) et le jeton de la console (<see cref="AdminToken"/>).
@@ -60,8 +60,7 @@ public sealed class RendezvousServer(
     /// est un fichier qui reste, relu et copié, et y écrire des adresses et
     /// des fragments de jetons ferait du service l'index qu'il promet de ne
     /// pas tenir. Le mode verbeux rend le détail pour diagnostiquer une
-    /// soirée, et se coupe ensuite. Le ticket d'invitation n'apparaît dans
-    /// aucun des deux : c'est un secret qui se retire, pas un identifiant.
+    /// soirée, et se coupe ensuite.
     /// </remarks>
     private void Note(string what, string detail) => Log.WriteLine(verbose ? $"{what} : {detail}" : what);
 
@@ -101,7 +100,7 @@ public sealed class RendezvousServer(
     /// de retoucher chaque chemin de code. Aucune trame ne les expose.
     /// </remarks>
     public sealed record Counters(
-        int OpenMailboxes, int PendingAnnouncements, int RelayWaiting, int ActiveRelays, int PendingInvitations,
+        int OpenMailboxes, int PendingAnnouncements, int RelayWaiting, int ActiveRelays,
         long Matches, long Relays, long RelayedBytes,
         int Connections, long RefusedConnections, long RateRefusals, int TrackedAddresses,
         int KnownPeers, int PendingSubmissions,
@@ -112,19 +111,14 @@ public sealed class RendezvousServer(
     /// </summary>
     /// <remarks>
     /// Un total seul ne dit pas si c'est un client qui annonce en boucle ou
-    /// quelqu'un qui parcourt l'espace des tickets d'invitation : la réponse
-    /// de l'opérateur n'est pas la même. Les connexions refusées viennent des
+    /// quelqu'un qui interroge les boîtes par milliers : la réponse de
+    /// l'opérateur n'est pas la même. Les connexions refusées viennent des
     /// plafonds et non du limiteur, mais elles se lisent au même endroit.
     /// </remarks>
-    public sealed record Refusals(long Announce, long Mailbox, long Relay, long Invitation, long Connection);
+    public sealed record Refusals(long Announce, long Mailbox, long Relay, long Directory, long Connection);
 
     public Counters Snapshot()
     {
-        int invitations;
-
-        lock (_invitationGate)
-            invitations = _invitations.Count;
-
         int mailboxes;
 
         lock (_mailboxGate)
@@ -133,14 +127,14 @@ public sealed class RendezvousServer(
         var refusedConnections = Interlocked.Read(ref _refusedConnections);
 
         return new(
-            mailboxes, _waiting.Count, _relayWaiting.Count, Volatile.Read(ref _activeRelays), invitations,
+            mailboxes, _waiting.Count, _relayWaiting.Count, Volatile.Read(ref _activeRelays),
             Interlocked.Read(ref _matched), Interlocked.Read(ref _relayed), PeerSession.TotalRelayedBytes,
             Volatile.Read(ref _connections), refusedConnections,
             Interlocked.Read(ref _rateRefusals), _rate.Count,
             directory.Known().Count, directory.Pending().Count,
             new Refusals(
                 Interlocked.Read(ref _refusedAnnounces), Interlocked.Read(ref _refusedMailboxes),
-                Interlocked.Read(ref _refusedRelays), Interlocked.Read(ref _refusedInvitations),
+                Interlocked.Read(ref _refusedRelays), Interlocked.Read(ref _refusedSubmissions),
                 refusedConnections));
     }
 
@@ -148,7 +142,7 @@ public sealed class RendezvousServer(
     private long _refusedAnnounces;
     private long _refusedMailboxes;
     private long _refusedRelays;
-    private long _refusedInvitations;
+    private long _refusedSubmissions;
 
     private int _connections;
     private int _activeRelays;
@@ -187,28 +181,6 @@ public sealed class RendezvousServer(
     private readonly ConcurrentDictionary<string, (PeerSession Session, DateTimeOffset Since)> _relayWaiting =
         new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, (int Count, DateTimeOffset Window)> _rate = new(StringComparer.Ordinal);
-
-    /// <summary>
-    /// Les invitations déposées, à usage unique.
-    /// </summary>
-    /// <remarks>
-    /// Le serveur lit cette charge, et pourrait donc la remplacer. C'est le prix
-    /// d'un ticket de douze caractères, qui ne peut pas porter une empreinte de
-    /// clé. La substitution se détecte après coup par la comparaison des six
-    /// mots du handshake ; une fois la clé épinglée, le serveur n'a plus aucun
-    /// pouvoir sur cette paire.
-    /// </remarks>
-    private sealed record Invitation(byte[] Payload, DateTimeOffset Expiry, string Bucket);
-
-    // Un verrou et non un dictionnaire concurrent : le plafond par adresse
-    // demande un compte tenu à jour à chaque dépôt et retrait, et deux
-    // structures concurrentes ne se mettent pas d'accord sans lui. Les
-    // invitations sont rares, le verrou ne se voit pas.
-    private readonly Lock _invitationGate = new();
-    private readonly Dictionary<string, Invitation> _invitations = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, int> _invitationsPerBucket = new(StringComparer.Ordinal);
-
-    private static readonly TimeSpan InvitationLifetime = TimeSpan.FromHours(24);
 
     private static readonly TimeSpan RateWindow = TimeSpan.FromMinutes(1);
 
@@ -469,8 +441,6 @@ public sealed class RendezvousServer(
                 {
                     RendezvousKind.Announce => await HandleAnnounceAsync(session, frame, ct).ConfigureAwait(false),
                     RendezvousKind.RelayOpen => await HandleRelayAsync(session, frame, ct).ConfigureAwait(false),
-                    RendezvousKind.TicketRegister => await HandleRegisterTicketAsync(session, frame, ct).ConfigureAwait(false),
-                    RendezvousKind.TicketRedeem => await HandleRedeemTicketAsync(session, frame, ct).ConfigureAwait(false),
                     RendezvousKind.MailboxOpen => await HandleMailboxOpenAsync(session, frame, ct).ConfigureAwait(false),
                     RendezvousKind.MailboxQuery => await HandleMailboxQueryAsync(session, frame, ct).ConfigureAwait(false),
                     RendezvousKind.MailboxDeposit => await HandleMailboxDepositAsync(session, frame, ct).ConfigureAwait(false),
@@ -479,7 +449,11 @@ public sealed class RendezvousServer(
                     RendezvousKind.BanListQuery => await HandleBanListQueryAsync(session, frame, ct).ConfigureAwait(false),
                     RendezvousKind.ConsensusQuery => await HandleConsensusQueryAsync(session, frame, ct).ConfigureAwait(false),
                     RendezvousKind.ConsensusV2Query => await HandleConsensusV2QueryAsync(session, frame, ct).ConfigureAwait(false),
-            RendezvousKind.NetworkStatusQuery => await HandleNetworkStatusQueryAsync(session, frame, ct).ConfigureAwait(false),
+                    RendezvousKind.NetworkStatusQuery => await HandleNetworkStatusQueryAsync(session, frame, ct).ConfigureAwait(false),
+                    // TicketRegister et TicketRedeem tombent ici depuis que le
+                    // plugin ne s'en sert plus : un dépôt lisible par le service
+                    // et retirable par qui devine six octets ne servait plus
+                    // personne, et restait une surface à défendre.
                     _ => false,
                 };
 
@@ -534,9 +508,17 @@ public sealed class RendezvousServer(
     /// Aucune réponse n'est faite, et c'est délibéré : le candidat n'a pas à
     /// savoir s'il a été retenu, et une réponse ferait de cette trame un moyen
     /// de sonder la file d'attente.
+    ///
+    /// Comptée dans le limiteur comme les autres trames : sans cela, c'était
+    /// la seule qu'un client pouvait répéter sans frein, et chacune coûtait
+    /// une lecture de pending.txt. Une trame refusée est ignorée en silence,
+    /// pour la même raison qu'une trame acceptée ne reçoit rien.
     /// </remarks>
     private bool HandleDirectorySubmit(PeerSession session, byte[] frame)
     {
+        if (RateExceeded(session.Bucket, ref _refusedSubmissions))
+            return true;
+
         if (RendezvousWire.TryReadDirectory(frame, out var submitted, out _) && submitted.Count is 1)
         {
             var entry = Announcer.Resolve(submitted[0], session.Remote);
@@ -802,116 +784,6 @@ public sealed class RendezvousServer(
         }
     }
 
-    private async Task<bool> HandleRegisterTicketAsync(PeerSession session, byte[] frame, CancellationToken ct)
-    {
-        var payloadLength = frame.Length - 1 - RendezvousWire.InvitationTicketSize;
-
-        if (payloadLength is <= 0 or > RendezvousWire.MaxTicketPayloadLength)
-            return false;
-
-        if (RateExceeded(session.Bucket, ref _refusedInvitations))
-        {
-            await session.SendAsync(RendezvousWire.Error("trop de dépôts"), ct).ConfigureAwait(false);
-            return false;
-        }
-
-        var key = Convert.ToHexStringLower(frame.AsSpan(1, RendezvousWire.InvitationTicketSize));
-        var invitation = new Invitation(
-            frame.AsSpan(1 + RendezvousWire.InvitationTicketSize).ToArray(),
-            clock.UtcNow + InvitationLifetime,
-            session.Bucket);
-
-        if (TryStoreInvitation(key, invitation) is false)
-        {
-            // Refusée mais sans couper : un foyer qui a beaucoup invité n'a
-            // commis aucune faute de protocole, et le plugin sait lire ce refus.
-            await session.SendAsync(RendezvousWire.Error("trop d'invitations en attente"), ct).ConfigureAwait(false);
-            return true;
-        }
-
-        Note("invitation déposée", $"par {session.Address}");
-
-        await session.SendAsync(RendezvousWire.Simple(RendezvousKind.TicketAccepted), ct).ConfigureAwait(false);
-        return true;
-    }
-
-    private bool TryStoreInvitation(string key, Invitation invitation)
-    {
-        var limits = Limits;
-
-        lock (_invitationGate)
-        {
-            // Redéposer le même ticket remplace l'ancien : il ne compte qu'une fois.
-            var replaced = _invitations.GetValueOrDefault(key);
-            var total = _invitations.Count - (replaced is null ? 0 : 1);
-            var perBucket = _invitationsPerBucket.GetValueOrDefault(invitation.Bucket)
-                            - (replaced?.Bucket == invitation.Bucket ? 1 : 0);
-
-            if (total >= limits.MaxInvitations || perBucket >= limits.MaxInvitationsPerAddress)
-                return false;
-
-            if (replaced is not null)
-                ReleaseInvitationLocked(replaced);
-
-            _invitations[key] = invitation;
-            _invitationsPerBucket[invitation.Bucket] = _invitationsPerBucket.GetValueOrDefault(invitation.Bucket) + 1;
-            return true;
-        }
-    }
-
-    private Invitation? TakeInvitation(string key)
-    {
-        lock (_invitationGate)
-        {
-            if (_invitations.Remove(key, out var invitation) is false)
-                return null;
-
-            ReleaseInvitationLocked(invitation);
-            return invitation;
-        }
-    }
-
-    private void ReleaseInvitationLocked(Invitation invitation)
-    {
-        var remaining = _invitationsPerBucket.GetValueOrDefault(invitation.Bucket) - 1;
-
-        if (remaining <= 0)
-            _invitationsPerBucket.Remove(invitation.Bucket);
-        else
-            _invitationsPerBucket[invitation.Bucket] = remaining;
-    }
-
-    private async Task<bool> HandleRedeemTicketAsync(PeerSession session, byte[] frame, CancellationToken ct)
-    {
-        if (frame.Length != 1 + RendezvousWire.InvitationTicketSize)
-            return false;
-
-        // Le plafond d'essais est ce qui rend les quarante-huit bits du ticket
-        // suffisants : sans lui, on pourrait les parcourir.
-        if (RateExceeded(session.Bucket, ref _refusedInvitations))
-        {
-            await session.SendAsync(RendezvousWire.Error("trop d'essais"), ct).ConfigureAwait(false);
-            return false;
-        }
-
-        var key = Convert.ToHexStringLower(frame.AsSpan(1, RendezvousWire.InvitationTicketSize));
-
-        // Usage unique : retiré à la première lecture, y compris s'il a expiré.
-        var invitation = TakeInvitation(key);
-
-        if (invitation is null || invitation.Expiry < clock.UtcNow)
-        {
-            await session.SendAsync(RendezvousWire.Error("invitation inconnue, déjà utilisée ou expirée"), ct)
-                         .ConfigureAwait(false);
-            return true;
-        }
-
-        Note("invitation retirée", $"par {session.Address}");
-
-        await session.SendAsync(RendezvousWire.TicketPayload(invitation.Payload), ct).ConfigureAwait(false);
-        return true;
-    }
-
     /// <summary>Ouvre les boîtes d'un client, qui recevra les dépôts sur cette connexion.</summary>
     private async Task<bool> HandleMailboxOpenAsync(PeerSession session, byte[] frame, CancellationToken ct)
     {
@@ -1131,18 +1003,6 @@ public sealed class RendezvousServer(
             {
                 relay.Session.ForgetKey(key);
                 _ = AbandonRelayAsync(relay.Session);
-            }
-        }
-
-        lock (_invitationGate)
-        {
-            foreach (var (key, invitation) in _invitations.ToList())
-            {
-                if (invitation.Expiry < now)
-                {
-                    _invitations.Remove(key);
-                    ReleaseInvitationLocked(invitation);
-                }
             }
         }
 

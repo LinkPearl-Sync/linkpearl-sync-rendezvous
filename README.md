@@ -35,13 +35,16 @@ dotnet test Linkpearl.Rendezvous.Tests/Linkpearl.Rendezvous.Tests.csproj
 
 `--port` sert en TCP et en UDP. 443 est un choix raisonnable pour les réseaux restrictifs,
 la charge utile étant de toute façon chiffrée de bout en bout par les pairs eux-mêmes.
-`--rate` borne les trames par minute et par adresse (annonces, relais, invitations, boîtes), un
+`--rate` borne les trames par minute et par adresse (annonces, relais, boîtes, candidatures), un
 /64 comptant pour une adresse en IPv6. Un `settings.json` écrit depuis la console le surcharge.
 
 Le journal dit ce qui se passe, jamais à qui : ni adresse IP, ni fragment de jeton ou de
 boîte, parce qu'un journal est un fichier qui reste, relu et copié. `--verbose` rend le
-détail, adresses comprises, pour diagnostiquer une soirée ; le ticket d'invitation
-n'apparaît dans aucun des deux modes.
+détail, adresses comprises, pour diagnostiquer une soirée.
+
+Les trames de ticket d'invitation (`TicketRegister`, `TicketRedeem`) ne sont plus servies :
+le plugin ne s'en sert plus, et le service y répond « trame inattendue » comme à toute trame
+inconnue.
 
 ## Héberger un serveur
 
@@ -106,8 +109,8 @@ La clé privée vit dans le secret `LPRDV_RELEASE_KEY` de l'environnement GitHub
 
 ## Ce qui est sur le disque
 
-Rien de ce que le rendez-vous fait : les jetons, les attentes, les boîtes ouvertes et les
-invitations déposées vivent en mémoire et disparaissent avec le processus. Redémarrer
+Rien de ce que le rendez-vous fait : les jetons, les attentes et les boîtes ouvertes vivent
+en mémoire et disparaissent avec le processus. Redémarrer
 n'efface donc aucune trace d'usage, puisqu'il n'y en a pas.
 
 Ce qui est sur le disque, en revanche : `peers.txt` (l'annuaire, écrit par l'opérateur) et

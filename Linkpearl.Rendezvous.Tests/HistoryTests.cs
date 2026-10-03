@@ -7,7 +7,7 @@ namespace Linkpearl.Rendezvous.Tests;
 public sealed class HistoryTests
 {
     private static RendezvousServer.Counters Counters(int mailboxes, long matches, long relayed, long rateRefusals, long refusedConnections = 0)
-        => new(mailboxes, 0, 0, 0, 0, matches, 0, relayed, 0, refusedConnections, rateRefusals, 0, 0, 0,
+        => new(mailboxes, 0, 0, 0, matches, 0, relayed, 0, refusedConnections, rateRefusals, 0, 0, 0,
             new RendezvousServer.Refusals(0, 0, 0, 0, refusedConnections));
 
     [Fact]
