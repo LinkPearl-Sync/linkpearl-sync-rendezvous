@@ -165,7 +165,7 @@ jobs:
         # En brouillon d'abord : une release publiée est immuable et n'accepte
         # plus aucun fichier. Tout est attaché au brouillon, qui n'est publié
         # qu'ensuite, complet.
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64  # v3.0.3
         with:
           tag_name: ${{ github.ref_name }}
           name: v${{ steps.tag.outputs.VERSION }}${{ steps.urgency.outputs.URGENT == 'true' && ' (urgente)' || '' }}
