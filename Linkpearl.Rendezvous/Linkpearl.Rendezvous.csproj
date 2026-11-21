@@ -24,7 +24,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="MaxMind.Db" Version="5.2.0" />
+    <PackageReference Include="MaxMind.Db" Version="5.3.0" />
   </ItemGroup>
 
   <Import Project="..\build\Protocol.Sources.props" />
