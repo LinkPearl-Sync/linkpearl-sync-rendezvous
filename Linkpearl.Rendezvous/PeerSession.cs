@@ -145,9 +145,25 @@ public sealed class PeerSession(TcpClient client) : IDisposable
         if (length is <= 0 or > RendezvousWire.MaxFrameLength)
             return null;
 
+        // Le corps a son délai, l'attente de l'en-tête n'en a pas : une
+        // session se tait des heures entre deux trames, mais pas au milieu
+        // d'une, où elle garderait sinon le tampon alloué ci-dessous.
         var body = new byte[length];
-        return await ReadExactlyAsync(body, ct).ConfigureAwait(false) ? body : null;
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        deadline.CancelAfter(FrameBodyTimeout);
+
+        try
+        {
+            return await ReadExactlyAsync(body, deadline.Token).ConfigureAwait(false) ? body : null;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested is false)
+        {
+            return null;
+        }
     }
+
+    /// <summary>Délai accordé au corps d'une trame dont l'en-tête est arrivé.</summary>
+    public TimeSpan FrameBodyTimeout { get; init; } = RendezvousLimits.Default.FrameBodyTimeout;
 
     /// <summary>
     /// Temps accordé à un envoi vers cette session, attente du tour comprise.

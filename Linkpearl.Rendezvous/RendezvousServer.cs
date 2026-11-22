@@ -44,6 +44,20 @@ public sealed class RendezvousServer(
     /// <summary>Où le service écrit ce qu'il fait.</summary>
     public TextWriter Log { get; init; } = Console.Out;
 
+    /// <summary>La mémoire gérée en usage, et celle que le ramasse-miettes s'autorise, en octets.</summary>
+    public Func<(long Used, long Available)> Memory { get; init; } = ProcessMemory;
+
+    /// <summary>Vrai si le tas géré dépasse la part que le service s'autorise pour accepter encore.</summary>
+    private bool UnderMemoryPressure(RendezvousLimits limits)
+    {
+        var (used, available) = Memory();
+        return available > 0 && used > available * limits.MemoryAdmissionRatio;
+    }
+
+    /// <summary>La mesure du processus : le tas géré, et sa limite (75 % du MemoryMax de l'unité).</summary>
+    public static (long Used, long Available) ProcessMemory()
+        => (GC.GetTotalMemory(forceFullCollection: false), GC.GetGCMemoryInfo().TotalAvailableMemoryBytes);
+
     /// <summary>La liste que le service publie ; nulle, il répond qu'il n'en a pas.</summary>
     public BanStore? Bans { get; init; }
 
@@ -125,7 +139,7 @@ public sealed class RendezvousServer(
         int mailboxes;
 
         lock (_mailboxGate)
-            mailboxes = _mailboxes.Count;
+            mailboxes = _mailboxes.Count + _shared.Count;
 
         var refusedConnections = Interlocked.Read(ref _refusedConnections);
 
@@ -217,6 +231,33 @@ public sealed class RendezvousServer(
     /// </remarks>
     private readonly Lock _mailboxGate = new();
     private readonly Dictionary<string, Mailbox> _mailboxes = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Les boîtes partagées, celles d'admission, et les sessions qui les tiennent.
+    /// </summary>
+    /// <remarks>
+    /// Un registre à part, sous le même verrou, que la réclamation ne touche
+    /// jamais et où rien n'est exclusif. Les dépôts ordinaires n'y vont pas, et
+    /// les dépôts partagés ne vont qu'ici : ouvrir en partage la boîte
+    /// personnelle d'un autre n'y fait rien lire.
+    /// </remarks>
+    private readonly Dictionary<string, HashSet<PeerSession>> _shared = new(StringComparer.Ordinal);
+
+    /// <summary>Le préfixe qui distingue, parmi les boîtes d'une session, celles du registre partagé.</summary>
+    private const string SharedPrefix = "s:";
+
+    /// <summary>Détenteurs au plus d'une boîte partagée : borne ce qu'un dépôt fait envoyer.</summary>
+    public const int MaxSharedHolders = 64;
+
+    /// <summary>
+    /// Détenteurs au plus d'une même boîte partagée par IPv4 ou par /48.
+    /// </summary>
+    /// <remarks>
+    /// Sans exclusivité, le seul moyen d'écarter les modérateurs serait d'en
+    /// prendre toutes les places : il faut alors autant de réseaux distincts
+    /// que la moitié du plafond, et non quelques connexions.
+    /// </remarks>
+    public const int MaxSharedHoldersPerNetwork = 2;
 
     /// <summary>Les sessions qui tiennent une boîte, et celle qui l'a réclamée s'il y en a une.</summary>
     private sealed class Mailbox
@@ -358,6 +399,18 @@ public sealed class RendezvousServer(
     public const int PaddedReflectSize = 32;
 
     /// <summary>
+    /// L'en-tête d'un message hors connexion de LiteNetLib (PacketProperty.UnconnectedMessage).
+    /// </summary>
+    /// <remarks>
+    /// Le plugin demande la réflexion par la socket LiteNetLib qui portera ses
+    /// liens, la seule dont l'adresse publique l'intéresse. LiteNetLib met cet
+    /// octet devant la requête, et ne livre au plugin qu'une réponse qui le
+    /// porte aussi : sans le reconnaître, le service ne répondait jamais à un
+    /// plugin, et aucun pair ne connaissait son adresse publique.
+    /// </remarks>
+    public const byte LiteNetUnconnectedMessage = 0x09;
+
+    /// <summary>
     /// La réponse à une requête de réflexion, ou null s'il ne faut rien répondre.
     /// </summary>
     /// <remarks>
@@ -377,6 +430,17 @@ public sealed class RendezvousServer(
     /// </remarks>
     public byte[]? Reflection(byte[] request, IPEndPoint remote)
     {
+        // Enveloppée par LiteNetLib : la réponse repart dans la même
+        // enveloppe. Exigée bourrée, puisque tout plugin qui l'envoie ainsi
+        // bourre déjà sa requête : la réponse reste plus petite qu'elle.
+        if (request is [LiteNetUnconnectedMessage, RendezvousKind.Reflect, ..])
+        {
+            if (request.Length < 1 + PaddedReflectSize || Reflection(request[1..], remote) is not { } inner)
+                return null;
+
+            return [LiteNetUnconnectedMessage, .. inner];
+        }
+
         if (request.Length == 0 || request[0] != RendezvousKind.Reflect)
             return null;
 
@@ -406,12 +470,39 @@ public sealed class RendezvousServer(
         var limits = Limits;
         var now = clock.UtcNow;
 
-        if (Count(_reflectRate, AddressBucket.Of(source), now) > limits.ReflectionsPerMinute)
+        if (CountReflection(AddressBucket.Of(source), now, limits) > limits.ReflectionsPerMinute)
             return true;
 
         return AddressBucket.Wide(source) is { } wide
-               && Count(_reflectRate, $"large:{wide}", now) > limits.ReflectionsPerMinute * PrefixRateFactor;
+               && CountReflection($"large:{wide}", now, limits) > limits.ReflectionsPerMinute * PrefixRateFactor;
     }
+
+    /// <summary>
+    /// Compte une requête de réflexion, ou la refuse si la table est pleine et la source inconnue.
+    /// </summary>
+    /// <remarks>
+    /// Une source déjà comptée le reste : un client au milieu d'un perçage ne
+    /// perd pas sa réponse parce qu'une rafale usurpée a rempli la table. Le
+    /// compteur peut s'écarter un peu de la table quand le balayage retire une
+    /// entrée entre les deux lectures ; il est recalé à chaque balayage, et
+    /// <see cref="ConcurrentDictionary{TKey,TValue}.Count"/> prendrait tous
+    /// les verrous à chaque paquet.
+    /// </remarks>
+    private int CountReflection(string key, DateTimeOffset now, RendezvousLimits limits)
+    {
+        if (_reflectRate.ContainsKey(key) is false)
+        {
+            if (Volatile.Read(ref _reflectSources) >= limits.MaxReflectionSources)
+                return int.MaxValue;
+
+            Interlocked.Increment(ref _reflectSources);
+        }
+
+        return Count(_reflectRate, key, now);
+    }
+
+    /// <summary>Entrées de <see cref="_reflectRate"/>, recalé à chaque balayage.</summary>
+    private int _reflectSources;
 
     private static int Count(ConcurrentDictionary<string, (int Count, DateTimeOffset Window)> rate, string key, DateTimeOffset now)
         => rate.AddOrUpdate(
@@ -437,9 +528,14 @@ public sealed class RendezvousServer(
     private void Admit(TcpClient client, CancellationToken ct)
     {
         var limits = Limits;
-        var session = new PeerSession(client) { SendTimeout = limits.PeerSendTimeout, RelayStallTimeout = limits.RelayStallTimeout };
+        var session = new PeerSession(client)
+        {
+            SendTimeout = limits.PeerSendTimeout,
+            RelayStallTimeout = limits.RelayStallTimeout,
+            FrameBodyTimeout = limits.FrameBodyTimeout,
+        };
 
-        if (_slots.TryReserve(session.Bucket, session.WideBucket, limits) is false)
+        if (UnderMemoryPressure(limits) || _slots.TryReserve(session.Bucket, session.WideBucket, limits) is false)
         {
             Interlocked.Increment(ref _refusedConnections);
             session.Dispose();
@@ -505,6 +601,8 @@ public sealed class RendezvousServer(
                     RendezvousKind.MailboxClaim => await HandleMailboxClaimAsync(session, frame, ct).ConfigureAwait(false),
                     RendezvousKind.MailboxQuery => await HandleMailboxQueryAsync(session, frame, ct).ConfigureAwait(false),
                     RendezvousKind.MailboxDeposit => await HandleMailboxDepositAsync(session, frame, ct).ConfigureAwait(false),
+                    RendezvousKind.SharedMailboxOpen => await HandleSharedMailboxOpenAsync(session, frame, ct).ConfigureAwait(false),
+                    RendezvousKind.SharedMailboxDeposit => await HandleSharedMailboxDepositAsync(session, frame, ct).ConfigureAwait(false),
                     RendezvousKind.DirectoryQuery => await HandleDirectoryQueryAsync(session, ct).ConfigureAwait(false),
                     RendezvousKind.DirectorySubmit => HandleDirectorySubmit(session, frame),
                     RendezvousKind.BanListQuery => await HandleBanListQueryAsync(session, frame, ct).ConfigureAwait(false),
@@ -743,6 +841,15 @@ public sealed class RendezvousServer(
             return false;
         }
 
+        // Le budget du service entier : refusé sans couper la session, qui
+        // n'a rien fait de mal et peut tenir des boîtes.
+        if (_waiting.Count + keys.Count(key => _waiting.ContainsKey(key) is false) > Limits.MaxWaitingKeys)
+        {
+            Interlocked.Increment(ref _refusedAnnounces);
+            await session.SendAsync(RendezvousWire.Error(Saturated), ct).ConfigureAwait(false);
+            return true;
+        }
+
         foreach (var key in keys)
         {
             // Le même client, arrivé par deux noms de ce service (un nom et son
@@ -913,7 +1020,16 @@ public sealed class RendezvousServer(
             foreach (var key in keys)
             {
                 if (_mailboxes.TryGetValue(key, out var mailbox) is false)
+                {
+                    // Plein : ignorée comme une boîte déjà tenue, sans le dire.
+                    if (MailboxBudgetSpentLocked(limits))
+                    {
+                        Interlocked.Increment(ref _refusedMailboxes);
+                        continue;
+                    }
+
                     _mailboxes[key] = mailbox = new Mailbox();
+                }
 
                 if (mailbox.Holders.Contains(session))
                     continue;
@@ -948,10 +1064,14 @@ public sealed class RendezvousServer(
             return false;
 
         var held = new List<bool>(addresses.Count);
+        var keys = addresses.Select(Convert.ToHexStringLower).ToList();
+        bool saturated;
 
         lock (_mailboxGate)
         {
-            foreach (var key in addresses.Select(Convert.ToHexStringLower))
+            saturated = MailboxBudgetExceededLocked(keys.Count(key => _mailboxes.ContainsKey(key) is false), Limits);
+
+            foreach (var key in saturated ? [] : keys)
             {
                 if (_mailboxes.TryGetValue(key, out var mailbox) is false)
                     _mailboxes[key] = mailbox = new Mailbox();
@@ -968,6 +1088,15 @@ public sealed class RendezvousServer(
 
                 held.Add(alone);
             }
+        }
+
+        // Un bit baissé dirait au client qu'un autre écoute à son nom : la
+        // saturation se dit autrement.
+        if (saturated)
+        {
+            Interlocked.Increment(ref _refusedMailboxes);
+            await session.SendAsync(RendezvousWire.Error(Saturated), ct).ConfigureAwait(false);
+            return true;
         }
 
         await session.SendAsync(RendezvousWire.MailboxClaimed(held), ct).ConfigureAwait(false);
@@ -987,7 +1116,11 @@ public sealed class RendezvousServer(
             return null;
         }
 
-        if (RateExceeded(session.Bucket, ref _refusedMailboxes))
+        // Une réclamation répond un bit par adresse, « tenue par un autre » ou
+        // non : c'est le même oracle de présence que MailboxQuery, et il
+        // passe sous le même compte, /48 compris. Compté par /64 seulement,
+        // il rendait au /48 tout ce que son compte lui retirait.
+        if (PresenceRateExceeded(session))
         {
             await session.SendAsync(RendezvousWire.Error("trop d'ouvertures"), ct).ConfigureAwait(false);
             return null;
@@ -1002,6 +1135,103 @@ public sealed class RendezvousServer(
         }
 
         return keys;
+    }
+
+    /// <summary>Ouvre des boîtes partagées, et dit lesquelles cette session tient désormais.</summary>
+    private async Task<bool> HandleSharedMailboxOpenAsync(PeerSession session, byte[] frame, CancellationToken ct)
+    {
+        if (await ReadMailboxRequestAsync(session, frame, ct).ConfigureAwait(false) is null
+            || RendezvousWire.TryReadAddresses(frame, out var addresses, out _) is false)
+            return false;
+
+        var network = session.WideBucket ?? session.Bucket;
+        var held = new List<bool>(addresses.Count);
+        var keys = addresses.Select(Convert.ToHexStringLower).ToList();
+        bool saturated;
+
+        lock (_mailboxGate)
+        {
+            saturated = MailboxBudgetExceededLocked(keys.Count(key => _shared.ContainsKey(key) is false), Limits);
+
+            foreach (var key in saturated ? [] : keys)
+            {
+                if (_shared.TryGetValue(key, out var holders) is false)
+                    _shared[key] = holders = new HashSet<PeerSession>(ReferenceEqualityComparer.Instance);
+
+                var joined = holders.Contains(session)
+                    || (holders.Count < MaxSharedHolders
+                        && holders.Count(other => (other.WideBucket ?? other.Bucket) == network) < MaxSharedHoldersPerNetwork);
+
+                if (joined && holders.Add(session))
+                    session.RememberMailbox(SharedPrefix + key);
+
+                if (holders.Count is 0)
+                    _shared.Remove(key);
+
+                held.Add(joined);
+            }
+        }
+
+        if (saturated)
+        {
+            Interlocked.Increment(ref _refusedMailboxes);
+            await session.SendAsync(RendezvousWire.Error(Saturated), ct).ConfigureAwait(false);
+            return true;
+        }
+
+        await session.SendAsync(RendezvousWire.MailboxClaimed(held), ct).ConfigureAwait(false);
+        Note($"boîtes partagées ouvertes ({held.Count(bit => bit)} sur {held.Count})", $"par {session.Address}");
+        return true;
+    }
+
+    /// <summary>Le refus d'une demande que le service n'a plus la place de tenir.</summary>
+    public const string Saturated = "service saturé, réessayer plus tard";
+
+    /// <summary>Vrai si une boîte de plus dépasserait le budget du service. Sous <see cref="_mailboxGate"/>.</summary>
+    private bool MailboxBudgetSpentLocked(RendezvousLimits limits) => MailboxBudgetExceededLocked(1, limits);
+
+    /// <summary>Vrai si <paramref name="fresh"/> boîtes de plus dépasseraient le budget du service. Sous <see cref="_mailboxGate"/>.</summary>
+    /// <remarks>
+    /// Un budget global en plus du plafond par session : 64 boîtes par
+    /// connexion fois 32 768 connexions laissaient tenir près d'un Go.
+    /// </remarks>
+    private bool MailboxBudgetExceededLocked(int fresh, RendezvousLimits limits)
+        => fresh > 0 && _mailboxes.Count + _shared.Count + fresh > limits.MaxOpenMailboxes;
+
+    /// <summary>Dépose dans une boîte partagée, et dit si quelqu'un l'a reçu.</summary>
+    private async Task<bool> HandleSharedMailboxDepositAsync(PeerSession session, byte[] frame, CancellationToken ct)
+    {
+        var payloadLength = frame.Length - 1 - RendezvousWire.MailboxAddressSize;
+
+        if (payloadLength is <= 0 or > RendezvousWire.MaxDepositLength)
+            return await RefuseAsync(session, Malformed, ct).ConfigureAwait(false);
+
+        if (PresenceRateExceeded(session))
+        {
+            await session.SendAsync(RendezvousWire.Error("trop de dépôts"), ct).ConfigureAwait(false);
+            return false;
+        }
+
+        var key = Convert.ToHexStringLower(frame.AsSpan(1, RendezvousWire.MailboxAddressSize));
+
+        PeerSession[] recipients;
+
+        lock (_mailboxGate)
+            recipients = _shared.TryGetValue(key, out var holders) ? [.. holders] : [];
+
+        // La réponse précède la remise : le candidat apprend tout de suite
+        // s'il doit encore déposer à l'ancienne, pour des membres d'avant.
+        await session.SendAsync(RendezvousWire.MailboxClaimed([recipients.Length > 0]), ct).ConfigureAwait(false);
+
+        if (recipients.Length is 0)
+            return true;
+
+        Note("demande remise (boîte partagée)", $"[boîte {key[..8]}] de {session.Address}");
+
+        var delivery = RendezvousWire.MailboxDelivery(frame.AsSpan(1 + RendezvousWire.MailboxAddressSize));
+        await Task.WhenAll(recipients.Select(recipient => recipient.TrySendAsync(delivery, ct))).ConfigureAwait(false);
+
+        return true;
     }
 
     /// <summary>Retire les boîtes restées sans détenteur après une ouverture refusée.</summary>
@@ -1157,6 +1387,16 @@ public sealed class RendezvousServer(
         {
             foreach (var key in session.Mailboxes)
             {
+                if (key.StartsWith(SharedPrefix, StringComparison.Ordinal))
+                {
+                    var shared = key[SharedPrefix.Length..];
+
+                    if (_shared.TryGetValue(shared, out var holders) && holders.Remove(session) && holders.Count is 0)
+                        _shared.Remove(shared);
+
+                    continue;
+                }
+
                 if (_mailboxes.TryGetValue(key, out var mailbox) is false || mailbox.Holders.Remove(session) is false)
                     continue;
 
@@ -1258,6 +1498,8 @@ public sealed class RendezvousServer(
                     rate.TryRemove(new KeyValuePair<string, (int, DateTimeOffset)>(bucket, entry));
             }
         }
+
+        Volatile.Write(ref _reflectSources, _reflectRate.Count);
     }
 
     /// <summary>

@@ -167,6 +167,29 @@ public sealed class MailboxClaimTests
     }
 
     [Fact]
+    public async Task Une_reclamation_compte_dans_le_budget_de_presence_du_48()
+    {
+        await using var harness = await ServerHarness.StartAsync();
+
+        // Le reste du /48 a déjà épuisé son budget de présence : une
+        // réclamation, qui répond un bit de présence par adresse, doit être
+        // refusée comme une interrogation, et non répondre quand même.
+        var rate = (System.Collections.Concurrent.ConcurrentDictionary<string, (int Count, DateTimeOffset Window)>)
+            typeof(RendezvousServer)
+                .GetField("_rate", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+                .GetValue(harness.Server)!;
+        rate["large:::/48"] = (RendezvousLimits.Default.AnnouncementsPerMinute * RendezvousServer.PrefixRateFactor, harness.Clock.UtcNow);
+
+        using var raw = new System.Net.Sockets.TcpClient(System.Net.Sockets.AddressFamily.InterNetworkV6);
+        await raw.ConnectAsync(System.Net.IPAddress.IPv6Loopback, harness.Port);
+        using var prober = new TestClient(raw);
+
+        await prober.SendAsync(RendezvousWire.MailboxClaim([Box(1)]));
+
+        Assert.Equal("trop d'ouvertures", ErrorText(await prober.ReadFrameAsync()));
+    }
+
+    [Fact]
     public async Task Une_boite_ordinaire_na_pas_plus_de_quatre_detenteurs()
     {
         await using var harness = await ServerHarness.StartAsync();
