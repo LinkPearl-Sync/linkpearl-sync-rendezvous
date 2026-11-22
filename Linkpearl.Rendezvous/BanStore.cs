@@ -25,6 +25,13 @@ public sealed class BanStore(string path)
     private BanList? _list;
     private DateTime _stamp = DateTime.MinValue;
 
+    /// <summary>
+    /// Vrai tant que bans.json existe sans se relire. La liste tenue en mémoire
+    /// n'est alors qu'un bouche-trou sous un sel au hasard : la servir ferait
+    /// circuler un sel qui n'est pas le nôtre, l'écrire effacerait le vrai.
+    /// </summary>
+    private bool _unreadable;
+
     /// <summary>La liste courante, relue si le fichier a changé sous nos pieds.</summary>
     public BanList Current()
     {
@@ -36,7 +43,7 @@ public sealed class BanStore(string path)
     public string Json()
     {
         lock (_gate)
-            return LoadLocked().ToJson(UpdatedLocked());
+            return ReadLocked().ToJson(UpdatedLocked());
     }
 
     /// <summary>
@@ -45,13 +52,18 @@ public sealed class BanStore(string path)
     /// <remarks>
     /// Chaque page est une liste entière sous le même sel, pour que le client
     /// la lise avec le même code qu'une liste complète. Hors de la liste, le
-    /// JSON est nul et le nombre de pages dit jusqu'où aller.
+    /// JSON est nul et le nombre de pages dit jusqu'où aller. Une liste
+    /// illisible ne sert aucune page : le client garde celle qu'il avait.
     /// </remarks>
     public (string? Json, int Pages) Page(int index, int size)
     {
         lock (_gate)
         {
             var list = LoadLocked();
+
+            if (_unreadable)
+                return (null, 0);
+
             var pages = Math.Max(1, (list.Entries.Count + size - 1) / size);
 
             if (index < 0 || index >= pages)
@@ -65,15 +77,23 @@ public sealed class BanStore(string path)
     /// <summary>
     /// Ajoute un personnage. Rend son empreinte, ou null s'il y figurait déjà.
     /// </summary>
+    /// <remarks>
+    /// Le plafond se tient ici comme à l'import : une entrée de plus, et le
+    /// réseau ne servait plus aucune page, puis le démarrage suivant ne
+    /// relisait plus le fichier.
+    /// </remarks>
     public string? Add(string name, ushort world, string reason)
     {
         lock (_gate)
         {
-            var list = LoadLocked();
+            var list = ReadLocked();
             var hash = BanList.Derive(name, world, list.Salt, list.Parameters);
 
             if (list.Entries.Any(entry => CryptographicOperations.FixedTimeEquals(entry.Hash, hash)))
                 return null;
+
+            if (list.Entries.Count >= BanList.MaxEntries)
+                throw new BanListFullException();
 
             var entries = list.Entries.ToList();
             entries.Add(new BanEntry(hash, Sanitize(reason), DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
@@ -95,7 +115,7 @@ public sealed class BanStore(string path)
     {
         lock (_gate)
         {
-            var list = LoadLocked();
+            var list = ReadLocked();
             var hash = BanList.Derive(name, world, list.Salt, list.Parameters);
 
             return (Convert.ToHexStringLower(hash), list.Entries.Any(entry => CryptographicOperations.FixedTimeEquals(entry.Hash, hash)));
@@ -120,7 +140,7 @@ public sealed class BanStore(string path)
 
         lock (_gate)
         {
-            var list = LoadLocked();
+            var list = ReadLocked();
 
             if (CryptographicOperations.FixedTimeEquals(list.Salt, imported.Salt) is false || list.Parameters != imported.Parameters)
                 return ImportOutcome.Foreign();
@@ -152,7 +172,7 @@ public sealed class BanStore(string path)
     {
         lock (_gate)
         {
-            var list = LoadLocked();
+            var list = ReadLocked();
             var kept = list.Entries
                 .Where(entry => Convert.ToHexStringLower(entry.Hash).Equals(hashHex, StringComparison.OrdinalIgnoreCase) is false)
                 .ToList();
@@ -183,6 +203,13 @@ public sealed class BanStore(string path)
         return kept.Length is 0 ? "sans motif" : kept;
     }
 
+    /// <summary>La liste telle que bans.json la porte, ou une exception s'il ne se relit pas.</summary>
+    private BanList ReadLocked()
+    {
+        var list = LoadLocked();
+        return _unreadable ? throw new BanListUnreadableException() : list;
+    }
+
     private long UpdatedLocked()
         => File.Exists(path) ? new DateTimeOffset(File.GetLastWriteTimeUtc(path)).ToUnixTimeSeconds() : 0;
 
@@ -199,16 +226,20 @@ public sealed class BanStore(string path)
             {
                 _list = parsed;
                 _stamp = stamp;
+                _unreadable = false;
                 return _list;
             }
 
             // Une liste illisible n'est pas réécrite : l'opérateur doit pouvoir
-            // la réparer. On sert une liste vide en attendant, ce qui ne bannit
-            // personne à tort.
-            Console.WriteLine($"Liste de bannissement illisible ({why}), liste vide servie en attendant.");
+            // la réparer, et elle seule porte le sel. Rien n'est servi en
+            // attendant, ce qui ne bannit personne à tort : une liste vide
+            // sous un sel neuf, elle, finissait écrite par-dessus la vraie au
+            // premier ajout. Relue dès que le fichier change.
+            Console.WriteLine($"Liste de bannissement illisible ({why}) : rien n'est servi ni écrit tant qu'elle n'est pas réparée.");
 
             _list = new BanList(RandomNumberGenerator.GetBytes(SaltLength), BanParameters.Default, []);
             _stamp = stamp;
+            _unreadable = true;
             return _list;
         }
 
@@ -216,12 +247,18 @@ public sealed class BanStore(string path)
         // Le garder en mémoire jusqu'à la première entrée le ferait changer à
         // chaque redémarrage, et les empreintes déjà publiées ne vaudraient plus rien.
         var fresh = new BanList(RandomNumberGenerator.GetBytes(SaltLength), BanParameters.Default, []);
+        _unreadable = false;
         SaveLocked(fresh);
         return fresh;
     }
 
     private void SaveLocked(BanList list)
     {
+        // Dernier rempart, si un chemin d'écriture oubliait ReadLocked : le sel
+        // du bouche-trou remplacerait le vrai pour de bon.
+        if (_unreadable)
+            throw new BanListUnreadableException();
+
         AtomicFile.WriteAllText(path, list.ToJson(DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
         _list = list;
         _stamp = File.GetLastWriteTimeUtc(path);
@@ -244,3 +281,14 @@ public sealed record ImportOutcome(int Added, int Total, bool ForeignSalt, strin
 
     public static ImportOutcome Unreadable(string why) => new(0, 0, false, why);
 }
+
+/// <summary>
+/// bans.json existe mais ne se relit pas : la liste n'est ni servie ni modifiée
+/// tant que l'opérateur ne l'a pas réparée.
+/// </summary>
+public sealed class BanListUnreadableException()
+    : InvalidOperationException("bans.json est illisible : le réparer, ou le retirer au prix d'un sel neuf qui rend caduques les empreintes déjà publiées. D'ici là, la liste n'est ni servie ni modifiée.");
+
+/// <summary>La liste a atteint le plafond au-delà duquel ni le disque ni le réseau ne la relisent.</summary>
+public sealed class BanListFullException()
+    : InvalidOperationException($"la liste a atteint son plafond de {BanList.MaxEntries} entrées : en retirer une avant d'en ajouter");

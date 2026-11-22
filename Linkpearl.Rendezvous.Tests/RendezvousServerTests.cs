@@ -130,6 +130,62 @@ public sealed class ConnectionLimitTests
     }
 
     [Fact]
+    public async Task Sous_pression_memoire_une_nouvelle_connexion_est_fermee()
+    {
+        // Les plafonds par session, multipliés par 32 768 connexions, ne
+        // tenaient pas dans les 512 Mo de l'unité : rien ne bornait la mémoire
+        // du service entier, et un OOM le redémarrait avec toutes ses boîtes.
+        await using var harness = await ServerHarness.StartAsync(memory: () => (900, 1000));
+
+        var late = await harness.ConnectAsync();
+
+        Assert.True(await late.IsClosedAsync(TimeSpan.FromSeconds(5)));
+    }
+
+    [Fact]
+    public async Task Sous_le_seuil_memoire_une_connexion_est_servie()
+    {
+        await using var harness = await ServerHarness.StartAsync(memory: () => (700, 1000));
+
+        var client = await harness.ConnectAsync();
+        await client.SendAsync(RendezvousWire.MailboxClaim([new byte[RendezvousWire.MailboxAddressSize]]));
+
+        Assert.Equal(RendezvousKind.MailboxClaimed, (await client.ReadFrameAsync())?[0]);
+    }
+
+    [Fact]
+    public async Task Une_trame_annoncee_dont_le_corps_ne_vient_pas_ferme_la_connexion()
+    {
+        // L'en-tête seul faisait allouer 64 Kio, gardés sans limite par une
+        // session qui tient une boîte et que le balayage épargne donc : des
+        // milliers de sessions ainsi calées dépassaient les 512 Mo de l'unité.
+        await using var harness = await ServerHarness.StartAsync(
+            new RendezvousLimits { FrameBodyTimeout = TimeSpan.FromMilliseconds(300) });
+
+        var stalled = await harness.ConnectAsync();
+        await stalled.SendAsync(RendezvousWire.MailboxOpen([new byte[RendezvousWire.MailboxAddressSize]]));
+        await stalled.Socket.SendAsync(new byte[] { 0, 1, 0, 0 });
+
+        Assert.True(await stalled.IsClosedAsync(TimeSpan.FromSeconds(5)));
+    }
+
+    [Fact]
+    public async Task Un_corps_qui_arrive_en_plusieurs_fois_dans_le_delai_est_servi()
+    {
+        await using var harness = await ServerHarness.StartAsync(
+            new RendezvousLimits { FrameBodyTimeout = TimeSpan.FromSeconds(2) });
+
+        var slow = await harness.ConnectAsync();
+        var frame = RendezvousWire.Frame(RendezvousWire.MailboxClaim([new byte[RendezvousWire.MailboxAddressSize]]));
+
+        await slow.Socket.SendAsync(frame.AsMemory(0, 6));
+        await Task.Delay(300);
+        await slow.Socket.SendAsync(frame.AsMemory(6));
+
+        Assert.Equal(RendezvousKind.MailboxClaimed, (await slow.ReadFrameAsync())?[0]);
+    }
+
+    [Fact]
     public async Task Au_dela_du_plafond_par_adresse_la_connexion_est_fermee()
     {
         await using var harness = await ServerHarness.StartAsync(
@@ -274,6 +330,49 @@ public sealed class LimiterTests
         await client.SendAsync(Announce([1], Ticket(0x13)));
 
         await AssertErrorAsync(client, "trop");
+    }
+
+    [Fact]
+    public async Task Le_service_entier_n_attend_pas_sur_plus_de_jetons_que_son_budget()
+    {
+        // Chaque attente garde un bloc scellé de 4 Kio au plus. Plafonnées par
+        // session seulement, 32 768 sessions en tenaient de quoi dépasser les
+        // 512 Mo de l'unité.
+        await using var harness = await ServerHarness.StartAsync(new RendezvousLimits { MaxWaitingKeys = 2 });
+
+        var first = await harness.ConnectAsync();
+        await first.SendAsync(Announce([1], Ticket(0x11), Ticket(0x12)));
+        Assert.True(await first.IsSilentAsync(Short));
+
+        var second = await harness.ConnectAsync();
+        await second.SendAsync(Announce([2], Ticket(0x13)));
+
+        await AssertErrorAsync(second, "saturé");
+        Assert.Equal(2, harness.Server.Snapshot().PendingAnnouncements);
+    }
+
+    [Fact]
+    public async Task Le_service_entier_ne_tient_pas_plus_de_boites_que_son_budget()
+    {
+        await using var harness = await ServerHarness.StartAsync(new RendezvousLimits { MaxOpenMailboxes = 2 });
+
+        var first = await harness.ConnectAsync();
+        await first.SendAsync(RendezvousWire.MailboxOpen([Box(1), Box(2)]));
+        Assert.True(await first.IsSilentAsync(Short));
+
+        var second = await harness.ConnectAsync();
+        await second.SendAsync(RendezvousWire.MailboxOpen([Box(3)]));
+        Assert.True(await second.IsSilentAsync(Short));
+        Assert.Equal(2, harness.Server.Snapshot().OpenMailboxes);
+
+        // Une réclamation refusée faute de place le dit : un bit baissé
+        // ferait croire au client qu'un autre écoute à son nom.
+        await second.SendAsync(RendezvousWire.MailboxClaim([Box(4)]));
+        await AssertErrorAsync(second, "saturé");
+
+        await second.SendAsync(RendezvousWire.SharedMailboxOpen([Box(5)]));
+        await AssertErrorAsync(second, "saturé");
+        Assert.Equal(2, harness.Server.Snapshot().OpenMailboxes);
     }
 
     [Fact]

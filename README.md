@@ -32,7 +32,11 @@ IPv6 (`--rate`). L'adresse tourne toutes les trente minutes, ce qui empêche de 
 périodes par l'adresse seule, pas de réinterroger le même nom. Une boîte personnelle se
 réclame en exclusivité (`MailboxClaim`, 0x1D, réponse `MailboxClaimed` 0x1E) : un tiers qui
 connaît le nom ne peut plus l'ouvrir en même temps que son titulaire pour lire ce qui lui
-est adressé, mais il peut toujours tester sa présence.
+est adressé, mais il peut toujours tester sa présence, et la réclamation compte dans le même
+débit que l'interrogation, /48 compris. Les boîtes d'admission des groupes vivent dans un
+registre à part (`SharedMailboxOpen` 0x1F, `SharedMailboxDeposit` 0x20) que la réclamation
+ne touche jamais, avec au plus deux détenteurs par IPv4 ou par /48 et 64 en tout : un
+porteur du code ne peut plus en écarter les modérateurs.
 
 **Il voit les adresses IP**, et lesquelles s'apparient ou relaient ensemble dans une
 fenêtre : c'est irréductible sans relais systématique.
@@ -122,7 +126,9 @@ Les serveurs installés par `install.sh` (site) se mettent à jour seuls : `lprd
 lance `lprdv update` quinze minutes après le démarrage, puis chaque heure, décalé au hasard
 jusqu'à une heure. Une release n'est installée que si son manifeste
 `lprdv.release.json` porte une signature d'une clé de `ReleaseKeys.cs`, et seulement 24 heures
-après sa signature. Une release urgente n'attend qu'une heure : le message de son tag annoté
+après que le serveur a vu ce manifeste pour la première fois (ou après sa signature, si elle
+est plus tardive) : l'heure de signature, écrite par qui signe, ne raccourcit jamais ce délai.
+Une release urgente n'attend qu'une heure : le message de son tag annoté
 porte une ligne `urgent` seule, et le tag est signé par une clé SSH inscrite dans
 `.github/release-signers` (`git tag -s -a vX.Y.Z -m vX.Y.Z -m urgent`), sans quoi la
 publication échoue. L'heure de garde est inscrite dans le binaire installé, hors de portée du
@@ -134,7 +140,9 @@ minuteur : `deploy.sh` la met à jour, et elle essuie chaque version la premièr
 
 La ronde ne pose que `lprdv` et `lprdv.service` : un changement de `lprdv-update.service` ou
 du minuteur demande de relancer `install.sh`. Le manifeste signé couvre aussi ces deux unités,
-qui tournent en root ; un manifeste antérieur, qui ne les porte pas, reste lisible. Avant
+qui tournent en root. Un manifeste sans champ `format` (ou d'un format inférieur à 2) est
+refusé : c'est ce qu'écrit le code d'avant les garde-fous de publication, et un tag poussé sur
+un ancien commit de `main` ferait encore signer ce code-là avec la vraie clé. Avant
 de rien poser, elle vérifie que le service répond sur `http://127.0.0.1:47901/healthz` : un
 service arrêté par son opérateur n'est pas relancé, et un service lancé avec `--no-admin` ou
 un autre `--admin-port` n'est jamais mis à jour. Une pré-version ne porte pas de manifeste et
@@ -143,7 +151,9 @@ touché, pas plus qu'une version à suffixe comme en produit `git describe` hors
 Couper : `systemctl disable --now lprdv-update.timer`.
 
 La clé privée vit dans le secret `LPRDV_RELEASE_KEY` de l'environnement GitHub `release`
-(tags `v*` seulement) et hors ligne chez le mainteneur. Elle est distincte de `directory.key`.
+(tags `v*` seulement, approbation du mainteneur exigée) et hors ligne chez le mainteneur. Elle
+est distincte de `directory.key`. Approuver une publication, c'est vérifier que le tag désigne
+bien le dernier commit de `main` : l'approbation est le seul obstacle entre un tag et la clé.
 
 ## Ce qui est sur le disque
 
@@ -342,7 +352,10 @@ L'autorité sert, sur son port habituel et non sur la console, la liste signée
 (`ConsensusQuery`, et sa version à régions `ConsensusV2Query` 0x1B, réponse `ConsensusV2Page`
 0x1C) et l'état public du réseau (`NetworkStatusQuery` 0x19, réponse
 `NetworkStatusPage` 0x1A, par tranches de 32 Kio et seize pages au plus). Un service ordinaire
-répond qu'il ne le publie pas. Cet état, recalculé à chaque ronde de sondes, est relevé chaque
+répond qu'il ne le publie pas. Cet état est signé par `directory.key` : la signature, sur les
+octets exacts du document sans elle, en est le dernier champ (`"signature"`, ECDSA P-256 au format
+IEEE P1363, en hexadécimal), et le site refuse un état non signé ou signé par une autre clé. Il
+est recalculé à chaque ronde de sondes, et relevé chaque
 heure par le site et affiché sur <https://linkpearl-sync.github.io/reseau.html> : les services
 en probation, listés ou sortis, avec leur disponibilité sur 24 heures. Jamais un service
 écarté, ni l'adresse d'où vient une candidature, ni la famille ; les candidats jamais joints

@@ -141,8 +141,10 @@ public sealed class AuthorityService(
     {
         var status = NetworkStatus.Build(ledger.Snapshot(), Current, PublicPoint, clock.UtcNow);
 
+        // Signée sous le verrou, comme la liste : la console peut faire signer
+        // en même temps, et une même clé ne se partage pas entre deux fils.
         lock (_gate)
-            _status = status;
+            _status = NetworkStatus.Sign(status, key);
     }
 
     public void IssueIfNeeded()

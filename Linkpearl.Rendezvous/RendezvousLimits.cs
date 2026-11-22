@@ -37,6 +37,22 @@ public sealed record RendezvousLimits
     public int ReflectionsPerMinute { get; init; } = 120;
 
     /// <summary>
+    /// Sources que le limiteur de réflexion retient en même temps.
+    /// </summary>
+    /// <remarks>
+    /// L'UDP ne prouve pas sa source : sans plafond, chaque adresse usurpée
+    /// laissait une entrée gardée une minute, et une rafale de quelques
+    /// dizaines de milliers de paquets par seconde remplissait les 512 Mo de
+    /// l'unité. 65 536 entrées pèsent une vingtaine de Mo au pire (environ
+    /// 300 octets par /48 IPv6, mesuré à l'audit), et dépassent de loin le
+    /// nombre de joueurs qui cherchent leur adresse dans la même minute.
+    /// Table pleine, une source inconnue n'a pas de réponse jusqu'au
+    /// prochain balayage : la découverte d'adresse se dégrade le temps de la
+    /// rafale, au lieu que le service tombe avec toutes ses boîtes.
+    /// </remarks>
+    public int MaxReflectionSources { get; init; } = 65_536;
+
+    /// <summary>
     /// Connexions TCP tenues en même temps, toutes adresses confondues.
     /// </summary>
     /// <remarks>
@@ -63,6 +79,20 @@ public sealed record RendezvousLimits
     public int MaxConnectionsPerPrefix { get; init; } = 128;
 
     /// <summary>
+    /// Part du tas géré au-delà de laquelle une nouvelle connexion est refusée.
+    /// </summary>
+    /// <remarks>
+    /// Les plafonds en nombre (connexions, boîtes, attentes) ont été choisis
+    /// pour les descripteurs de fichiers et le confort des joueurs, pas pour
+    /// la mémoire : multipliés entre eux, ils dépassaient les 512 Mo de
+    /// l'unité, et un OOM redémarrait le service en perdant toutes ses boîtes
+    /// et tous ses relais. Sous systemd, .NET borne le tas à 75 % de
+    /// MemoryMax : refuser au-delà de 80 % de ce tas garde la marge des
+    /// sessions déjà servies, qui ne sont jamais coupées pour cela.
+    /// </remarks>
+    public double MemoryAdmissionRatio { get; init; } = 0.8;
+
+    /// <summary>
     /// Délai au bout duquel une session qui ne tient rien est fermée.
     /// </summary>
     /// <remarks>
@@ -83,6 +113,19 @@ public sealed record RendezvousLimits
     /// dix secondes ne coupent personne de légitime.
     /// </remarks>
     public TimeSpan FirstFrameTimeout { get; init; } = TimeSpan.FromSeconds(10);
+
+    /// <summary>
+    /// Délai accordé au corps d'une trame dont l'en-tête est arrivé.
+    /// </summary>
+    /// <remarks>
+    /// Entre deux trames, une session peut se taire des heures. Mais un
+    /// en-tête fait allouer jusqu'à 64 Kio, et une session qui tient une boîte
+    /// échappe au balayage : l'en-tête seul, sans corps, gardait ces 64 Kio
+    /// aussi longtemps que le keepalive répondait. Trente secondes laissent
+    /// passer la plus grosse trame à 17 kbit/s, bien en deçà de tout lien qui
+    /// sert une apparence.
+    /// </remarks>
+    public TimeSpan FrameBodyTimeout { get; init; } = TimeSpan.FromSeconds(30);
 
     /// <summary>
     /// Boîtes qu'une même connexion peut tenir ouvertes.
@@ -108,6 +151,30 @@ public sealed record RendezvousLimits
 
     /// <summary>Jetons sur lesquels une même connexion peut attendre un pair.</summary>
     public int MaxWaitingKeysPerSession { get; init; } = 64;
+
+    /// <summary>
+    /// Jetons en attente sur tout le service.
+    /// </summary>
+    /// <remarks>
+    /// Chaque attente garde le bloc scellé de son annonce, jusqu'à 4 Kio, et
+    /// l'audit a mesuré 4 580 octets par jeton annoncé seul. Les plafonds par
+    /// session, multipliés par 32 768 connexions, dépassaient de loin les
+    /// 512 Mo de l'unité. Une connexion du plugin attend d'ordinaire sur un
+    /// seul jeton : 16 384 servent des milliers de joueurs en pointe, pour
+    /// 75 Mo au pire.
+    /// </remarks>
+    public int MaxWaitingKeys { get; init; } = 16_384;
+
+    /// <summary>
+    /// Boîtes ouvertes sur tout le service, ordinaires et partagées.
+    /// </summary>
+    /// <remarks>
+    /// 446 octets par boîte, mesurés à l'audit : 131 072 boîtes pèsent moins
+    /// de 60 Mo, quand les 64 par connexion du plafond par session en
+    /// permettaient près d'un Go. Un joueur en tient deux à six d'ordinaire,
+    /// quarante-deux avec dix groupes.
+    /// </remarks>
+    public int MaxOpenMailboxes { get; init; } = 131_072;
 
     /// <summary>
     /// Si le service accepte de relayer.

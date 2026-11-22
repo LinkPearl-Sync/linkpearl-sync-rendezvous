@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json.Nodes;
 using Linkpearl.Core.Transport.Rendezvous;
@@ -85,5 +86,37 @@ public sealed class NetworkStatusTests
 
         Assert.Equal(1, status["version"]!.GetValue<int>());
         Assert.Equal(Now.ToUnixTimeSeconds(), status["generated"]!.GetValue<long>());
+    }
+
+    [Fact]
+    public void L_etat_publie_porte_la_signature_de_l_autorite()
+    {
+        // L'audit : reseau.json, publié sur le site officiel avec la clé de
+        // l'autorité et son empreinte, venait d'une réponse TCP en clair, que
+        // tout observateur du trajet pouvait réécrire dans la forme attendue.
+        using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        var document = NetworkStatus.Build([Service("rdv.liste.ch:47900", ServiceStanding.Listed, Now)], null, [0x04], Now);
+
+        var signed = NetworkStatus.Sign(document, key);
+
+        Assert.True(NetworkStatus.TryVerify(signed, [ServiceConsensus.PublicPoint(key)], out var verified));
+        Assert.Equal(document, verified);
+        Assert.NotNull(JsonNode.Parse(signed)!["signature"]);
+    }
+
+    [Fact]
+    public void Un_etat_retouche_ou_signe_par_une_autre_cle_est_refuse()
+    {
+        using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        using var other = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        var signed = NetworkStatus.Sign(
+            NetworkStatus.Build([Service("rdv.liste.ch:47900", ServiceStanding.Listed, Now)], null, [0x04], Now), key);
+
+        Assert.False(NetworkStatus.TryVerify(signed, [ServiceConsensus.PublicPoint(other)], out _));
+
+        var tampered = Encoding.UTF8.GetBytes(Encoding.UTF8.GetString(signed).Replace("rdv.liste.ch", "rdv.pirate.ch"));
+        Assert.False(NetworkStatus.TryVerify(tampered, [ServiceConsensus.PublicPoint(key)], out _));
+
+        Assert.False(NetworkStatus.TryVerify(NetworkStatus.Build([], null, [0x04], Now), [ServiceConsensus.PublicPoint(key)], out _));
     }
 }

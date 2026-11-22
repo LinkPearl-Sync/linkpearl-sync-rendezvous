@@ -88,6 +88,18 @@ public sealed class UpdaterTests : IDisposable
         _releases.Files["lprdv.service"] = unit;
     }
 
+    /// <summary>
+    /// Publie une release signée maintenant et la laisse sous les yeux du
+    /// serveur pendant <paramref name="age"/> : une première ronde la voit et
+    /// attend, puis l'horloge avance. La garde se compte depuis cette vue.
+    /// </summary>
+    private async Task PublishSeen(string version, TimeSpan age, bool urgent = false, byte[]? binary = null)
+    {
+        Publish(version, TimeSpan.Zero, urgent, binary);
+        Assert.Equal(UpdateOutcome.Waiting, await Updater().RunAsync(CancellationToken.None));
+        _clock.Advance(age);
+    }
+
     private Updater Updater(string? current = "0.5.2")
     {
         Version? version = current is not null && ReleaseVersion.TryParse(current, out var parsed) ? parsed : null;
@@ -95,9 +107,9 @@ public sealed class UpdaterTests : IDisposable
     }
 
     [Fact]
-    public async Task Une_release_signee_de_plus_de_24_heures_est_installee()
+    public async Task Une_release_vue_depuis_plus_de_24_heures_est_installee()
     {
-        Publish("0.6.0", TimeSpan.FromHours(25));
+        await PublishSeen("0.6.0", TimeSpan.FromHours(25));
 
         Assert.Equal(UpdateOutcome.Installed, await Updater().RunAsync(CancellationToken.None));
         Assert.Equal(new byte[] { 1, 2, 3 }, _installation.Staged);
@@ -106,7 +118,7 @@ public sealed class UpdaterTests : IDisposable
     [Fact]
     public async Task Une_release_trop_recente_attend()
     {
-        Publish("0.6.0", TimeSpan.FromHours(23));
+        await PublishSeen("0.6.0", TimeSpan.FromHours(23));
 
         Assert.Equal(UpdateOutcome.Waiting, await Updater().RunAsync(CancellationToken.None));
         Assert.Null(_installation.Staged);
@@ -118,12 +130,73 @@ public sealed class UpdaterTests : IDisposable
         // L'urgence vient du workflow : un plancher qui vit dans le binaire
         // installé laisse au mainteneur le temps de retirer une release
         // urgente qu'il n'a pas voulue.
-        Publish("0.6.0", TimeSpan.FromMinutes(5), urgent: true);
+        await PublishSeen("0.6.0", TimeSpan.FromMinutes(5), urgent: true);
         Assert.Equal(UpdateOutcome.Waiting, await Updater().RunAsync(CancellationToken.None));
         Assert.Null(_installation.Staged);
 
-        Publish("0.6.0", Linkpearl.Rendezvous.Updater.UrgentGuard + TimeSpan.FromMinutes(1), urgent: true);
+        _clock.Advance(Linkpearl.Rendezvous.Updater.UrgentGuard - TimeSpan.FromMinutes(5));
         Assert.Equal(UpdateOutcome.Installed, await Updater().RunAsync(CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Une_release_antidatee_attend_24_heures_depuis_sa_premiere_vue()
+    {
+        // L'heure « signed » est écrite par qui signe : un workflow détourné
+        // l'antidatait de 25 heures et sa release s'installait dès la première
+        // ronde, sans laisser au mainteneur le temps de la retirer. Une release
+        // honnête découverte tard ne s'en distingue pas, et attend autant.
+        Publish("0.6.0", TimeSpan.FromHours(25));
+        Assert.Equal(UpdateOutcome.Waiting, await Updater().RunAsync(CancellationToken.None));
+
+        _clock.Advance(Linkpearl.Rendezvous.Updater.Guard - TimeSpan.FromMinutes(1));
+        Assert.Equal(UpdateOutcome.Waiting, await Updater().RunAsync(CancellationToken.None));
+        Assert.Null(_installation.Staged);
+
+        _clock.Advance(TimeSpan.FromMinutes(1));
+        Assert.Equal(UpdateOutcome.Installed, await Updater().RunAsync(CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Une_release_urgente_antidatee_attend_une_heure_depuis_sa_premiere_vue()
+    {
+        Publish("0.6.0", TimeSpan.FromMinutes(61), urgent: true);
+        Assert.Equal(UpdateOutcome.Waiting, await Updater().RunAsync(CancellationToken.None));
+        Assert.Null(_installation.Staged);
+
+        _clock.Advance(Linkpearl.Rendezvous.Updater.UrgentGuard);
+        Assert.Equal(UpdateOutcome.Installed, await Updater().RunAsync(CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Un_manifeste_remplace_sous_le_meme_numero_recommence_la_garde()
+    {
+        // Une release retirée puis republiée sous le même numéro, mais avec un
+        // autre manifeste, n'hérite pas du temps déjà attendu par la première.
+        Publish("0.6.0", TimeSpan.Zero);
+        Assert.Equal(UpdateOutcome.Waiting, await Updater().RunAsync(CancellationToken.None));
+
+        _clock.Advance(TimeSpan.FromHours(23));
+        Publish("0.6.0", TimeSpan.FromHours(25));
+        Assert.Equal(UpdateOutcome.Waiting, await Updater().RunAsync(CancellationToken.None));
+
+        _clock.Advance(TimeSpan.FromHours(23));
+        Assert.Equal(UpdateOutcome.Waiting, await Updater().RunAsync(CancellationToken.None));
+        Assert.Null(_installation.Staged);
+
+        _clock.Advance(TimeSpan.FromHours(1));
+        Assert.Equal(UpdateOutcome.Installed, await Updater().RunAsync(CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Une_release_signee_dans_le_futur_est_refusee()
+    {
+        // Quelques minutes d'avance sont un écart d'horloge, pas une faute.
+        Publish("0.6.0", -TimeSpan.FromMinutes(1));
+        Assert.Equal(UpdateOutcome.Waiting, await Updater().RunAsync(CancellationToken.None));
+
+        Publish("0.6.0", -TimeSpan.FromHours(2));
+        Assert.Equal(UpdateOutcome.Rejected, await Updater().RunAsync(CancellationToken.None));
+        Assert.Null(_installation.Staged);
     }
 
     [Fact]
@@ -140,7 +213,7 @@ public sealed class UpdaterTests : IDisposable
     [Fact]
     public async Task Un_binaire_qui_ne_correspond_pas_a_sa_somme_est_refuse()
     {
-        Publish("0.6.0", TimeSpan.FromHours(25), binary: [9, 9, 9]);
+        await PublishSeen("0.6.0", TimeSpan.FromHours(25), binary: [9, 9, 9]);
 
         Assert.Equal(UpdateOutcome.Rejected, await Updater().RunAsync(CancellationToken.None));
         Assert.Null(_installation.Staged);
@@ -179,7 +252,7 @@ public sealed class UpdaterTests : IDisposable
     [Fact]
     public async Task Une_version_muette_revient_en_arriere_et_n_est_plus_retentee()
     {
-        Publish("0.6.0", TimeSpan.FromHours(25));
+        await PublishSeen("0.6.0", TimeSpan.FromHours(25));
         _installation.Healthy = false;
 
         Assert.Equal(UpdateOutcome.RolledBack, await Updater().RunAsync(CancellationToken.None));
@@ -192,12 +265,12 @@ public sealed class UpdaterTests : IDisposable
     [Fact]
     public async Task Une_version_plus_recente_que_la_refusee_est_retentee()
     {
-        Publish("0.6.0", TimeSpan.FromHours(25));
+        await PublishSeen("0.6.0", TimeSpan.FromHours(25));
         _installation.Healthy = false;
         await Updater().RunAsync(CancellationToken.None);
 
         _installation.Healthy = true;
-        Publish("0.6.1", TimeSpan.FromHours(25));
+        await PublishSeen("0.6.1", TimeSpan.FromHours(25));
 
         Assert.Equal(UpdateOutcome.Installed, await Updater().RunAsync(CancellationToken.None));
     }
@@ -205,7 +278,7 @@ public sealed class UpdaterTests : IDisposable
     [Fact]
     public async Task Un_redemarrage_qui_echoue_revient_en_arriere()
     {
-        Publish("0.6.0", TimeSpan.FromHours(25));
+        await PublishSeen("0.6.0", TimeSpan.FromHours(25));
         _installation.RestartFails = true;
 
         Assert.Equal(UpdateOutcome.RolledBack, await Updater().RunAsync(CancellationToken.None));
@@ -217,7 +290,7 @@ public sealed class UpdaterTests : IDisposable
     [Fact]
     public async Task Un_service_arrete_n_est_ni_mis_a_jour_ni_relance()
     {
-        Publish("0.6.0", TimeSpan.FromHours(25));
+        await PublishSeen("0.6.0", TimeSpan.FromHours(25));
         _installation.HealthyBefore = false;
 
         Assert.Equal(UpdateOutcome.Stopped, await Updater().RunAsync(CancellationToken.None));
@@ -228,7 +301,7 @@ public sealed class UpdaterTests : IDisposable
     [Fact]
     public async Task La_pose_est_marquee_en_cours_puis_confirmee()
     {
-        Publish("0.6.0", TimeSpan.FromHours(25));
+        await PublishSeen("0.6.0", TimeSpan.FromHours(25));
         var marked = false;
         _installation.OnStage = () => marked = File.Exists(Pending);
 
@@ -265,7 +338,7 @@ public sealed class UpdaterTests : IDisposable
     [Fact]
     public async Task Une_pose_qui_echoue_remet_les_fichiers_sans_redemarrer()
     {
-        Publish("0.6.0", TimeSpan.FromHours(25));
+        await PublishSeen("0.6.0", TimeSpan.FromHours(25));
         _installation.StageFails = true;
 
         Assert.Equal(UpdateOutcome.Rejected, await Updater().RunAsync(CancellationToken.None));
