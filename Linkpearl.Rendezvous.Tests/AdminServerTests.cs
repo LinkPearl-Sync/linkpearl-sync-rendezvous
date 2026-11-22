@@ -495,6 +495,58 @@ public sealed class AdminServerTests : IAsyncLifetime
             (await SendAsync(HttpMethod.Post, "/api/bans/import", body: """{"version":99}""")).StatusCode);
 
     [Fact]
+    public async Task Un_bannissement_au_plafond_rend_409_et_ne_change_rien()
+    {
+        // Import plutôt qu'Add : 4096 dérivations PBKDF2 prendraient des minutes.
+        var current = _bans.Current();
+        var entries = Enumerable.Range(0, BanList.MaxEntries)
+            .Select(i => new BanEntry(RandomNumberGenerator.GetBytes(32), "importee", i))
+            .ToList();
+        Assert.True(_bans.Import(new BanList(current.Salt, current.Parameters, entries).ToJson(0)).Ok);
+        var before = File.ReadAllText(Path.Combine(_dir, "bans.json"));
+
+        var response = await SendAsync(
+            HttpMethod.Post, "/api/bans", body: """{"name":"Nom Fictif","world":42,"reason":"x"}""");
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.Contains("plafond", await response.Content.ReadAsStringAsync());
+        Assert.Equal(before, File.ReadAllText(Path.Combine(_dir, "bans.json")));
+    }
+
+    [Fact]
+    public async Task Une_liste_illisible_rend_503_a_chaque_geste_et_n_est_pas_ecrasee()
+    {
+        var path = Path.Combine(_dir, "bans.json");
+        File.WriteAllText(path, "ceci n'est pas du JSON");
+
+        var added = await SendAsync(
+            HttpMethod.Post, "/api/bans", body: """{"name":"Nom Fictif","world":42,"reason":"x"}""");
+
+        // Le message s'adresse à l'opérateur : quoi faire, sans chemin.
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, added.StatusCode);
+        Assert.Contains("illisible", await added.Content.ReadAsStringAsync());
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable,
+            (await SendAsync(HttpMethod.Delete, "/api/bans", body: $$"""{"hash":"{{new string('0', 64)}}"}""")).StatusCode);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable,
+            (await SendAsync(HttpMethod.Post, "/api/bans/verify", body: """{"name":"Nom Fictif","world":42}""")).StatusCode);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable,
+            (await SendAsync(HttpMethod.Post, "/api/bans/import",
+                body: new BanList(RandomNumberGenerator.GetBytes(32), BanParameters.Default, []).ToJson(0))).StatusCode);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, (await SendAsync(HttpMethod.Get, "/api/bans/export")).StatusCode);
+
+        // Sans jeton, la liste publique ne sert rien, et n'en dit pas plus.
+        var published = await _client.GetAsync($"{_root}/api/bans");
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, published.StatusCode);
+        Assert.DoesNotContain("illisible", await published.Content.ReadAsStringAsync());
+
+        // La console reste ouverte : le reste du service n'y est pour rien.
+        Assert.Equal(HttpStatusCode.OK, (await SendAsync(HttpMethod.Get, "/api/status")).StatusCode);
+
+        Assert.Equal("ceci n'est pas du JSON", File.ReadAllText(path));
+    }
+
+    [Fact]
     public async Task Les_reglages_se_lisent_avec_leurs_bornes()
     {
         var response = await SendAsync(HttpMethod.Get, "/api/settings");

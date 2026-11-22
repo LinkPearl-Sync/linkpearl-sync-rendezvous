@@ -1,4 +1,5 @@
 using System.Net;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Linkpearl.Core.Abstractions;
@@ -124,12 +125,18 @@ public sealed class AuthorityLedger
                 {
                     known.Label = entry.Label;
 
-                    // Un service listé qui change de nom repasse en
-                    // probation : la liste signée affiche ce nom à chaque
+                    // Un service qui a déjà répondu et change de nom repasse
+                    // en probation : la liste signée affiche ce nom à chaque
                     // joueur, et l'admission a jugé un service sous l'ancien.
                     // Sans cela, un service se faisait admettre sous un nom
-                    // anodin puis prenait celui d'un autre.
-                    if (known.ListedAt is not null && known.Vetoed is false)
+                    // anodin puis prenait celui d'un autre. Sorti, il
+                    // reprenait sa place par le chemin du retour, sans
+                    // probation ni plafond du jour ; en fin de probation, il
+                    // entrait sous un nom vu dix minutes. Seul un candidat
+                    // jamais joint change de nom librement : sa probation
+                    // n'a pas commencé.
+                    if (known.Vetoed is false
+                        && (known.ListedAt is not null || known.ProbationStart is not null || known.DelistedAt is not null))
                     {
                         known.ListedAt = null;
                         StartProbation(known, _clock.UtcNow);
@@ -429,8 +436,22 @@ public sealed class AuthorityLedger
         return IPAddress.TryParse(literal, out var address) ? ServiceConsensus.Family(address) : null;
     }
 
+    /// <summary>
+    /// La forme canonique d'une adresse, si elle peut figurer dans la liste signée.
+    /// </summary>
+    /// <remarks>
+    /// L'hôte seul est borné à 255 caractères, mais la liste signe l'hôte suivi
+    /// de « :port », et le plugin la relit sous la même borne de 255. Un hôte de
+    /// 250 caractères passait donc la candidature puis faisait lever chaque
+    /// signature une fois listé : la liste de tout le réseau ouvert cessait
+    /// d'être réémise, et le service retombait en boucle au redémarrage.
+    /// </remarks>
     private static string? KeyOf(string address)
-        => RendezvousAddress.TryParse(address, out var parsed, out _) ? ServiceConsensus.Canonical(parsed) : null;
+        => RendezvousAddress.TryParse(address, out var parsed, out _)
+           && ServiceConsensus.Canonical(parsed) is var key
+           && Encoding.UTF8.GetByteCount(key) <= RendezvousWire.MaxDirectoryAddressLength
+            ? key
+            : null;
 
     private void SaveLocked()
     {
@@ -510,6 +531,13 @@ public sealed class AuthorityLedger
                 // repart alors de zéro, sans que rien d'autre ne change.
                 if (item["history"] is { } history)
                     service.History.AddRange(history.GetValue<string>().TakeLast(HistorySize).Select(bit => bit == '1'));
+
+                // Un service qu'aucune liste signée ne peut porter, écrit par
+                // une version d'avant la borne de KeyOf, est laissé de côté :
+                // gardé, il ferait lever chaque émission, et le démarrage avec.
+                // Il ne perd rien qu'il aurait pu obtenir.
+                if (KeyOf(service.Address) is null)
+                    continue;
 
                 _services[service.Address] = service;
             }

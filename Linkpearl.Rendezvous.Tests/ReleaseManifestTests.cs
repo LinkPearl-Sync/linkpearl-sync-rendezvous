@@ -47,15 +47,26 @@ public sealed class ReleaseManifestTests
     public void Un_manifeste_incomplet_est_refuse(string json)
         => Assert.False(ReleaseManifest.TryParse(Encoding.UTF8.GetBytes(json), out _, out _));
 
-    [Fact]
-    public void Un_manifeste_d_avant_les_unites_de_mise_a_jour_se_lit_encore()
+    [Theory]
+    [InlineData("""{"version":"9.0.0","signed":1,"urgent":true,"files":{"lprdv":"%a","lprdv.service":"%b"}}""")]
+    [InlineData("""{"version":"9.0.0","signed":1,"urgent":true,"files":{"lprdv":"%a","lprdv.service":"%b","lprdv-update.service":"%a","lprdv-update.timer":"%b"}}""")]
+    [InlineData("""{"format":1,"version":"9.0.0","signed":1,"urgent":true,"files":{"lprdv":"%a","lprdv.service":"%b"}}""")]
+    public void Un_manifeste_signe_par_un_code_d_avant_les_garde_fous_est_refuse(string template)
     {
-        var json = """{"version":"0.6.0","signed":1,"urgent":false,"files":{"lprdv":"%a","lprdv.service":"%b"}}"""
-            .Replace("%a", new string('a', 64)).Replace("%b", new string('b', 64));
+        // L'audit : un tag poussé sur un ancien commit de main exécute le
+        // workflow de ce commit, sans vérification d'ascendance ni de tag
+        // signé, et signe avec la vraie clé un vieux code numéroté plus haut,
+        // urgent de surcroît. Ce code-là n'écrit pas le format : le serveur à
+        // jour refuse ce qu'il signe.
+        var json = template.Replace("%a", new string('a', 64)).Replace("%b", new string('b', 64));
 
-        Assert.True(ReleaseManifest.TryParse(Encoding.UTF8.GetBytes(json), out var parsed, out _));
-        Assert.False(parsed!.Files.ContainsKey("lprdv-update.service"));
+        Assert.False(ReleaseManifest.TryParse(Encoding.UTF8.GetBytes(json), out _, out var why));
+        Assert.Contains("format", why);
     }
+
+    [Fact]
+    public void Le_manifeste_ecrit_aujourd_hui_porte_son_format()
+        => Assert.Contains($"\"format\":{ReleaseManifest.CurrentFormat}", Encoding.UTF8.GetString(Sample().ToBytes()));
 
     [Fact]
     public void Les_unites_de_mise_a_jour_font_l_aller_retour()
@@ -77,7 +88,7 @@ public sealed class ReleaseManifestTests
     [Fact]
     public void Une_somme_d_unite_malformee_est_refusee()
     {
-        var json = """{"version":"0.6.0","signed":1,"urgent":false,"files":{"lprdv":"%a","lprdv.service":"%b","lprdv-update.timer":"court"}}"""
+        var json = """{"format":2,"version":"0.6.0","signed":1,"urgent":false,"files":{"lprdv":"%a","lprdv.service":"%b","lprdv-update.timer":"court"}}"""
             .Replace("%a", new string('a', 64)).Replace("%b", new string('b', 64));
 
         Assert.False(ReleaseManifest.TryParse(Encoding.UTF8.GetBytes(json), out _, out _));

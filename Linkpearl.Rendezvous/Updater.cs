@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Security.Cryptography;
 using Linkpearl.Core.Abstractions;
 
@@ -59,7 +60,19 @@ public sealed class Updater(
     /// </remarks>
     public static readonly TimeSpan UrgentGuard = TimeSpan.FromHours(1);
 
+    /// <summary>
+    /// L'avance tolérée sur l'heure de signature : de quoi couvrir un écart
+    /// d'horloge entre le runner qui signe et ce serveur, pas davantage.
+    /// </summary>
+    public static readonly TimeSpan ClockSkew = TimeSpan.FromMinutes(10);
+
     private string RefusedPath => Path.Combine(stateDir, "refused");
+
+    /// <summary>
+    /// Le dernier manifeste vu (version et empreinte) et l'heure où ce serveur
+    /// l'a vu pour la première fois.
+    /// </summary>
+    private string SeenPath => Path.Combine(stateDir, "seen");
 
     /// <summary>
     /// La version posée et pas encore confirmée par /healthz. Une ronde tuée
@@ -117,15 +130,35 @@ public sealed class Updater(
         if (File.Exists(RefusedPath) && File.ReadAllText(RefusedPath).Trim() == version)
             return UpdateOutcome.Refused;
 
-        var age = clock.UtcNow - DateTimeOffset.FromUnixTimeSeconds(manifest.Signed);
+        var now = clock.UtcNow;
+
+        // Comparé en secondes, sans conversion : une heure hors du calendrier
+        // ferait lever FromUnixTimeSeconds au lieu d'être refusée.
+        if (manifest.Signed > (now + ClockSkew).ToUnixTimeSeconds())
+        {
+            log.WriteLine($"Version {version} : heure de signature dans le futur, rien n'est installé.");
+            return UpdateOutcome.Rejected;
+        }
+
+        // La garde court depuis la plus tardive de deux heures : la signature,
+        // et la première vue de ce manifeste par ce serveur. L'heure « signed »
+        // seule est écrite par qui signe : un workflow détourné l'antidatait,
+        // et sa release s'installait dès la première ronde, sans laisser au
+        // mainteneur le temps de la retirer. Une release honnête découverte
+        // tard (serveur éteint, minuteur arrêté) attend donc elle aussi sa
+        // garde entière depuis cette vue : rien ne la distingue d'une release
+        // antidatée, et un jour de retard coûte moins qu'un binaire détourné
+        // posé en root partout.
+        var since = Math.Max(manifest.Signed, FirstSeen(version, manifestBytes, now));
+        var age = now - DateTimeOffset.FromUnixTimeSeconds(since);
 
         var guard = manifest.Urgent ? UrgentGuard : Guard;
 
         if (age < guard)
         {
             log.WriteLine(manifest.Urgent
-                ? $"Version {version} urgente, signée il y a {age.TotalMinutes:0} min : installée après {UrgentGuard.TotalMinutes:0} min."
-                : $"Version {version} signée il y a {age.TotalHours:0} h : installée après {Guard.TotalHours:0} h.");
+                ? $"Version {version} urgente, en attente depuis {age.TotalMinutes:0} min : installée après {UrgentGuard.TotalMinutes:0} min."
+                : $"Version {version} en attente depuis {age.TotalHours:0} h : installée après {Guard.TotalHours:0} h.");
             return UpdateOutcome.Waiting;
         }
 
@@ -187,6 +220,34 @@ public sealed class Updater(
         }
 
         return await RollBackAsync(version, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// L'heure, en secondes Unix, où ce serveur a vu ce manifeste pour la première fois.
+    /// </summary>
+    /// <remarks>
+    /// Rangée dans le répertoire d'état, à root, hors de portée de qui signe.
+    /// Un seul manifeste suivi à la fois, désigné par sa version et son
+    /// empreinte : une release retirée puis republiée sous le même numéro avec
+    /// un autre manifeste n'hérite pas du temps déjà attendu par la première.
+    /// Un fichier illisible, ou une heure plus tardive que maintenant (horloge
+    /// reculée, édition à la main), repart de maintenant : au pire, on attend
+    /// plus longtemps.
+    /// </remarks>
+    private long FirstSeen(string version, byte[] manifestBytes, DateTimeOffset now)
+    {
+        var id = $"{version} {Convert.ToHexStringLower(SHA256.HashData(manifestBytes))}";
+        var seconds = now.ToUnixTimeSeconds();
+
+        if (File.Exists(SeenPath)
+            && File.ReadAllLines(SeenPath) is [var seenId, var seenAt]
+            && seenId == id
+            && long.TryParse(seenAt, NumberStyles.None, CultureInfo.InvariantCulture, out var seen)
+            && seen <= seconds)
+            return seen;
+
+        AtomicFile.WriteAllLines(SeenPath, [id, seconds.ToString(CultureInfo.InvariantCulture)]);
+        return seconds;
     }
 
     /// <summary>Tranche une pose laissée en suspens ; null si la ronde peut continuer.</summary>

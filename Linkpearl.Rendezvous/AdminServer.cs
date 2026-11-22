@@ -144,20 +144,36 @@ public sealed class AdminServer(
         {
             await HandleAsync(context).ConfigureAwait(false);
         }
+        catch (BanListUnreadableException e)
+        {
+            // Pas une panne du service : un fichier à réparer. 503 dit « pas
+            // maintenant », et le message, écrit pour l'opérateur et sans
+            // chemin, dit quoi faire. La liste publique, servie sans jeton,
+            // n'en dit pas autant.
+            var published = context.Request.HttpMethod is "GET" && context.Request.Url?.AbsolutePath is "/api/bans";
+
+            RespondSafely(context, 503,
+                new JsonObject { ["error"] = published ? "liste de bannissement indisponible" : e.Message }.ToJsonString());
+        }
         catch (Exception e)
         {
             // Rien du détail ne part vers le client : un message d'exception
             // porte des chemins de fichiers et des noms de types.
             Console.WriteLine($"Console : requête en échec ({e.GetType().Name}).");
 
-            try
-            {
-                Respond(context, 500, "application/json", """{"error":"erreur interne"}""");
-            }
-            catch (Exception)
-            {
-                // La réponse est peut-être déjà partie, ou la connexion fermée.
-            }
+            RespondSafely(context, 500, """{"error":"erreur interne"}""");
+        }
+    }
+
+    private static void RespondSafely(HttpListenerContext context, int status, string json)
+    {
+        try
+        {
+            Respond(context, status, "application/json", json);
+        }
+        catch (Exception)
+        {
+            // La réponse est peut-être déjà partie, ou la connexion fermée.
         }
     }
 
@@ -417,7 +433,17 @@ public sealed class AdminServer(
                     return;
                 }
 
-                var hash = bans.Add(name, world, reason);
+                string? hash;
+
+                try
+                {
+                    hash = bans.Add(name, world, reason);
+                }
+                catch (BanListFullException e)
+                {
+                    Respond(context, 409, "application/json", new JsonObject { ["error"] = e.Message }.ToJsonString());
+                    return;
+                }
 
                 Respond(context, hash is null ? 409 : 200, "application/json",
                     hash is null

@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using Linkpearl.Core.Safety;
 using Linkpearl.Rendezvous;
 using Xunit;
@@ -118,6 +119,72 @@ public sealed class BanStoreTests : IDisposable
 
         Assert.Empty(store.Current().Entries);
         Assert.Equal("ceci n'est pas du JSON", File.ReadAllText(Path_));
+    }
+
+    /// <summary>Écrit une liste de <paramref name="count"/> empreintes au hasard sous <paramref name="salt"/>.</summary>
+    private void WriteList(byte[] salt, int count)
+    {
+        var entries = Enumerable.Range(0, count)
+            .Select(i => new BanEntry(RandomNumberGenerator.GetBytes(32), "importee", i))
+            .ToList();
+
+        File.WriteAllText(Path_, new BanList(salt, BanParameters.Default, entries).ToJson(0));
+    }
+
+    [Fact]
+    public void Une_liste_pleine_refuse_un_ajout_et_reste_lisible()
+    {
+        // Une entrée de plus et ni le réseau ni le prochain démarrage ne
+        // relisaient la liste : le plafond se tient à l'écriture.
+        var salt = RandomNumberGenerator.GetBytes(32);
+        WriteList(salt, BanList.MaxEntries);
+        var before = File.ReadAllText(Path_);
+        var store = new BanStore(Path_);
+
+        Assert.Throws<BanListFullException>(() => store.Add("Nom Fictif", 42, "contenu illegal"));
+
+        Assert.Equal(before, File.ReadAllText(Path_));
+        Assert.True(BanList.TryParse(File.ReadAllText(Path_), out _, out var why), why);
+        Assert.Equal(salt, new BanStore(Path_).Current().Salt);
+    }
+
+    [Fact]
+    public void Une_liste_illisible_ne_sert_rien_et_refuse_toute_modification_sans_perdre_son_sel()
+    {
+        // Une liste trop longue, écrite par une version d'avant le plafond :
+        // illisible au démarrage, elle était servie vide sous un sel neuf que
+        // le premier ajout écrivait par-dessus le vrai, pour de bon.
+        var salt = RandomNumberGenerator.GetBytes(32);
+        WriteList(salt, BanList.MaxEntries + 1);
+        var before = File.ReadAllText(Path_);
+        var store = new BanStore(Path_);
+        var elsewhere = new BanList(RandomNumberGenerator.GetBytes(32), BanParameters.Default, []).ToJson(0);
+
+        Assert.Null(store.Page(0, 64).Json);
+        Assert.Throws<BanListUnreadableException>(() => store.Json());
+        Assert.Throws<BanListUnreadableException>(() => store.Check("Nom Fictif", 42));
+        Assert.Throws<BanListUnreadableException>(() => store.Add("Nom Fictif", 42, "contenu illegal"));
+        Assert.Throws<BanListUnreadableException>(() => store.Remove(new string('0', 64)));
+        Assert.Throws<BanListUnreadableException>(() => store.Import(elsewhere));
+
+        Assert.Equal(before, File.ReadAllText(Path_));
+    }
+
+    [Fact]
+    public void Une_liste_reparee_se_relit_et_se_modifie_de_nouveau()
+    {
+        File.WriteAllText(Path_, "ceci n'est pas du JSON");
+        var store = new BanStore(Path_);
+        Assert.Throws<BanListUnreadableException>(() => store.Add("Nom Fictif", 42, "contenu illegal"));
+
+        // L'opérateur remet la liste en état : pas besoin de redémarrer.
+        var salt = RandomNumberGenerator.GetBytes(32);
+        WriteList(salt, 1);
+        File.SetLastWriteTimeUtc(Path_, DateTime.UtcNow.AddMinutes(1));
+
+        Assert.NotNull(store.Add("Nom Fictif", 42, "contenu illegal"));
+        Assert.Equal(salt, new BanStore(Path_).Current().Salt);
+        Assert.Equal(2, new BanStore(Path_).Current().Entries.Count);
     }
 }
 

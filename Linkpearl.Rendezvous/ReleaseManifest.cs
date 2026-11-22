@@ -16,6 +16,21 @@ namespace Linkpearl.Rendezvous;
 /// </remarks>
 public sealed record ReleaseManifest(Version Version, long Signed, bool Urgent, IReadOnlyDictionary<string, string> Files)
 {
+    /// <summary>
+    /// Le format écrit par ce code, et le plus ancien qu'il accepte.
+    /// </summary>
+    /// <remarks>
+    /// Un tag poussé sur un ancien commit de <c>main</c> fait tourner le
+    /// workflow de ce commit-là, d'avant la vérification d'ascendance et du
+    /// tag signé, et signe avec la vraie clé un vieux code numéroté plus haut
+    /// que tout, urgent s'il le veut. L'environnement <c>release</c> exige une
+    /// approbation, mais c'est le seul obstacle. Ce code-là n'écrit pas de
+    /// format : un serveur à jour refuse donc ce qu'il signe. À relever si un
+    /// jour une faille du chemin de publication oblige à écarter les
+    /// manifestes de la version courante.
+    /// </remarks>
+    public const int CurrentFormat = 2;
+
     public const string FileName = "lprdv.release.json";
 
     public const string SignatureName = "lprdv.release.json.sig";
@@ -47,6 +62,7 @@ public sealed record ReleaseManifest(Version Version, long Signed, bool Urgent, 
 
         var document = new JsonObject
         {
+            ["format"] = CurrentFormat,
             ["version"] = Version.ToString(3),
             ["signed"] = Signed,
             ["urgent"] = Urgent,
@@ -64,8 +80,19 @@ public sealed record ReleaseManifest(Version Version, long Signed, bool Urgent, 
         {
             var root = JsonNode.Parse(json)?.AsObject();
 
-            if (root is null
-                || ReleaseVersion.TryParse(root["version"]?.GetValue<string>(), out var version) is false
+            if (root is null)
+            {
+                rejection = "manifeste incomplet";
+                return false;
+            }
+
+            if (root["format"] is not JsonValue format || format.TryGetValue<int>(out var number) is false || number < CurrentFormat)
+            {
+                rejection = $"format de manifeste antérieur au {CurrentFormat}, signé par un code d'avant les garde-fous de publication";
+                return false;
+            }
+
+            if (ReleaseVersion.TryParse(root["version"]?.GetValue<string>(), out var version) is false
                 || root["signed"] is not JsonValue signed
                 || root["urgent"] is not JsonValue urgent
                 || root["files"] is not JsonObject files)

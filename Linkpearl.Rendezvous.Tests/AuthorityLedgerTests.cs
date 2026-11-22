@@ -272,6 +272,45 @@ public sealed class AuthorityLedgerTests : IDisposable
     }
 
     [Fact]
+    public void Un_service_sorti_qui_change_de_nom_ne_revient_qu_apres_une_probation()
+    {
+        // Sorti après 24 heures de silence, il se représentait sous le nom
+        // d'un autre et rentrait par le chemin du retour, sans probation ni
+        // plafond du jour : la liste signée portait dix minutes plus tard un
+        // nom que personne n'avait jugé.
+        var ledger = Ledger("rdv.a.ch");
+        Run(ledger, TimeSpan.FromHours(72) + Round, Up, "rdv.a.ch");
+        Run(ledger, TimeSpan.FromHours(24) + Round, Down, "rdv.a.ch");
+        Assert.Equal(ServiceStanding.Delisted, StandingOf(ledger, "rdv.a.ch:47900"));
+
+        ledger.Track(new DirectoryEntry("rdv.a.ch", "Eorzea Events Linkpearl Primary"), AddressBucket.Of(Where("rdv.a.ch")));
+        Run(ledger, Round, Up, "rdv.a.ch");
+
+        Assert.Equal(ServiceStanding.Probation, StandingOf(ledger, "rdv.a.ch:47900"));
+        Assert.Empty(ledger.Listed());
+
+        // Une probation entière sous le nouveau nom, et il entre sous ce nom.
+        Run(ledger, TimeSpan.FromHours(72), Up, "rdv.a.ch");
+        Assert.Equal("Eorzea Events Linkpearl Primary", Assert.Single(ledger.Listed()).Label);
+    }
+
+    [Fact]
+    public void Un_service_en_probation_qui_change_de_nom_la_recommence()
+    {
+        // Renommé à la dernière ronde, il entrait sous un nom resté dix
+        // minutes sous les yeux de l'opérateur au lieu de trois jours.
+        var ledger = Ledger("rdv.a.ch");
+        Run(ledger, TimeSpan.FromHours(72) - Round, Up, "rdv.a.ch");
+        Assert.Equal(ServiceStanding.Probation, StandingOf(ledger, "rdv.a.ch:47900"));
+
+        ledger.Track(new DirectoryEntry("rdv.a.ch", "Autre nom"), AddressBucket.Of(Where("rdv.a.ch")));
+        Run(ledger, TimeSpan.FromHours(1), Up, "rdv.a.ch");
+
+        Assert.Empty(ledger.Listed());
+        Assert.Equal(ServiceStanding.Probation, StandingOf(ledger, "rdv.a.ch:47900"));
+    }
+
+    [Fact]
     public void Trois_services_du_meme_sous_reseau_n_en_listent_que_deux()
     {
         _where["rdv.a.ch"] = IPAddress.Parse("203.0.113.1");
@@ -407,6 +446,76 @@ public sealed class AuthorityLedgerTests : IDisposable
 
         Assert.Throws<InvalidOperationException>(() => AuthorityLedger.Load(StatePath, _clock));
         Assert.Equal("{ pas du json", File.ReadAllText(StatePath));
+    }
+
+    /// <summary>Un nom d'hôte valide de <paramref name="length"/> caractères, en étiquettes d'au plus 63.</summary>
+    private static string HostOf(int length)
+    {
+        var labels = new List<string>();
+
+        while (length > 0)
+        {
+            var size = Math.Min(63, length);
+            labels.Add(new string((char)('a' + labels.Count), size));
+            length -= size + 1;
+        }
+
+        return string.Join('.', labels);
+    }
+
+    private static byte[] SignListed(AuthorityLedger ledger)
+    {
+        using var key = System.Security.Cryptography.ECDsa.Create(System.Security.Cryptography.ECCurve.NamedCurves.nistP256);
+        return ServiceConsensus.Sign(
+            new ServiceConsensus(ledger.NextVersion(), 0, (long)ServiceConsensus.Lifetime.TotalSeconds, ledger.Listed()), key);
+    }
+
+    [Theory]
+    [InlineData(249, true)]
+    [InlineData(250, false)]
+    [InlineData(255, false)]
+    public void Seule_une_adresse_qui_tient_dans_la_liste_signee_est_suivie(int hostLength, bool tracked)
+    {
+        var host = HostOf(hostLength);
+        Assert.Equal(hostLength, host.Length);
+
+        var ledger = Ledger();
+        Assert.Equal(tracked, ledger.Track(new DirectoryEntry(host, "Service"), "203.0.113.7"));
+
+        // Listé au bout de sa probation, il doit pouvoir être signé : un seul
+        // service intenable figeait la liste de tout le réseau ouvert.
+        for (var elapsed = TimeSpan.Zero; elapsed <= TimeSpan.FromHours(72) + Round; elapsed += Round)
+        {
+            ledger.Record(host, new ProbeResult(true, IPAddress.Parse("203.0.113.7")));
+            ledger.Settle();
+            _clock.Advance(Round);
+        }
+
+        Assert.Equal(tracked ? 1 : 0, ledger.Listed().Count);
+        Assert.NotEmpty(SignListed(ledger));
+    }
+
+    [Fact]
+    public void Un_registre_qui_porte_une_adresse_intenable_se_charge_sans_elle()
+    {
+        var ledger = Ledger("rdv.a.ch");
+        Run(ledger, TimeSpan.FromHours(72) + Round, Up, "rdv.a.ch");
+
+        // Ce qu'une version d'avant la borne a pu écrire : un service listé dont
+        // l'adresse canonique dépasse 255 octets, et qui faisait lever chaque
+        // signature, au démarrage compris.
+        var root = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(StatePath))!.AsObject();
+        var services = root["services"]!.AsArray();
+        var poisoned = services.Single()!.DeepClone().AsObject();
+        poisoned["address"] = $"{HostOf(250)}:47900";
+        poisoned["submitter"] = "203.0.113.7";
+        services.Add(poisoned);
+        File.WriteAllText(StatePath, root.ToJsonString());
+
+        var reloaded = AuthorityLedger.Load(StatePath, _clock);
+
+        Assert.Equal("rdv.a.ch:47900", Assert.Single(reloaded.Snapshot()).Address);
+        Assert.NotEmpty(SignListed(reloaded));
     }
 
     [Fact]

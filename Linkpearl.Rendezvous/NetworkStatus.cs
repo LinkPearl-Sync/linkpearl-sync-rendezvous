@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json.Nodes;
 using Linkpearl.Core.Transport.Rendezvous;
@@ -89,5 +90,79 @@ public static class NetworkStatus
             };
 
         return Encoding.UTF8.GetBytes(document.ToJsonString());
+    }
+
+    /// <summary>La fin d'un document signé : <c>,"signature":"</c>, 128 chiffres hexadécimaux, <c>"}</c>.</summary>
+    private static readonly byte[] SignaturePrefix = ",\"signature\":\""u8.ToArray();
+
+    private const int SignatureHexLength = 128;
+
+    /// <summary>
+    /// Le document, avec en dernier champ la signature de ses propres octets par la clé de l'autorité.
+    /// </summary>
+    /// <remarks>
+    /// L'état du réseau voyage en TCP nu, et le site le publie avec la clé de
+    /// l'autorité et son empreinte : sans signature, un observateur du trajet
+    /// le réécrivait à sa guise. La signature porte sur les octets exacts du
+    /// document sans elle, et s'ajoute comme dernier champ : aucune forme
+    /// canonique du JSON à reproduire chez qui vérifie, et un lecteur qui
+    /// l'ignore lit le même document qu'avant. Même clé et même format que la
+    /// liste signée (ECDSA P-256 sur SHA-256, IEEE P1363).
+    /// </remarks>
+    public static byte[] Sign(byte[] document, ECDsa key)
+    {
+        var signature = Convert.ToHexStringLower(
+            key.SignData(document, HashAlgorithmName.SHA256, DSASignatureFormat.IeeeP1363FixedFieldConcatenation));
+
+        return [.. document.AsSpan(0, document.Length - 1), .. SignaturePrefix, .. Encoding.ASCII.GetBytes(signature), (byte)'"', (byte)'}'];
+    }
+
+    /// <summary>Vrai si l'une des clés a signé ce document ; <paramref name="document"/> est alors le document sans sa signature.</summary>
+    public static bool TryVerify(byte[] signed, IEnumerable<byte[]> trustedPoints, out byte[] document)
+    {
+        document = [];
+        var tail = SignaturePrefix.Length + SignatureHexLength + 2;
+
+        if (signed.Length <= tail
+            || signed.AsSpan(signed.Length - tail, SignaturePrefix.Length).SequenceEqual(SignaturePrefix) is false
+            || signed[^2] != '"' || signed[^1] != '}')
+            return false;
+
+        byte[] signature;
+
+        try
+        {
+            signature = Convert.FromHexString(Encoding.ASCII.GetString(signed, signed.Length - SignatureHexLength - 2, SignatureHexLength));
+        }
+        catch (FormatException)
+        {
+            return false;
+        }
+
+        byte[] unsigned = [.. signed.AsSpan(0, signed.Length - tail), (byte)'}'];
+
+        foreach (var point in trustedPoints)
+        {
+            try
+            {
+                using var key = ECDsa.Create(new ECParameters
+                {
+                    Curve = ECCurve.NamedCurves.nistP256,
+                    Q = new ECPoint { X = point[1..33], Y = point[33..] },
+                });
+
+                if (key.VerifyData(unsigned, signature, HashAlgorithmName.SHA256, DSASignatureFormat.IeeeP1363FixedFieldConcatenation))
+                {
+                    document = unsigned;
+                    return true;
+                }
+            }
+            catch (CryptographicException)
+            {
+                // Un point hors de la courbe ne vérifie rien : on passe au suivant.
+            }
+        }
+
+        return false;
     }
 }
